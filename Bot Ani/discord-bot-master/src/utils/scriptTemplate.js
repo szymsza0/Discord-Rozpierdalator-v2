@@ -30,12 +30,13 @@ const DEFAULT_BRIEF_QUESTIONS = [
   "Jakie są główne efekty/rezultaty i po jakim czasie widoczne?",
   "Jaka jest cena regularna i promocyjna (jeśli dotyczy)?",
   "Czy oferta jest ograniczona czasowo/ilościowo (np. \"do końca miesiąca\", \"pierwsze 20 osób\")?",
-  "Do kogo kierowana jest reklama - grupa docelowa, jej obawy/bolączki?",
-  "Jaki styl komunikacji ma być zastosowany: formalny / przyjazny / ekspercki / emocjonalny?",
-  "Jakie są dowody wiarygodności do wykorzystania (lata doświadczenia, liczba klientów, opinie, certyfikaty)?",
-  "Jakie ma być wezwanie do działania i sposób kontaktu (telefon, formularz, DM, link w bio)?",
-  "Czy są sformułowania/obietnice, których NIE wolno użyć (zastrzeżenia prawne/branżowe)?",
+  "Czy mamy dodatkowe dowody wiarygodności oprócz bycia ekspertem / autorskiego programu (lata doświadczenia, liczba klientów, opinie, certyfikaty)?",
 ];
+
+// CTA is a fixed business rule, not something worth asking about per-brief -
+// always injected into the generated brief context instead of a question.
+export const FIXED_CTA_NOTE =
+  "CTA zawsze: wypełnienie formularza kontaktowego (nie zmieniaj tego, chyba że operator jawnie napisał inaczej).";
 
 /**
  * Reads the numbered list right after BRIEF_QUESTIONS_HEADING in the raw doc

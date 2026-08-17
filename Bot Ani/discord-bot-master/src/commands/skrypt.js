@@ -13,14 +13,14 @@ import {
   findClientHistory,
   appendScriptRow,
 } from "../utils/scriptSheet.js";
-import { getScriptTemplate } from "../utils/scriptTemplate.js";
+import { getScriptTemplate, FIXED_CTA_NOTE } from "../utils/scriptTemplate.js";
 import {
   fetchDocPlainText,
   buildScriptDocContent,
   createFormattedScriptDoc,
   moveDocToFolder,
 } from "../utils/googleDocs.js";
-import { generateScriptVariant, ScriptGenerationError } from "../utils/scriptGenerator.js";
+import { generateScriptVariant, analyzeBriefCoverage, ScriptGenerationError } from "../utils/scriptGenerator.js";
 import { integrateScriptFeedback } from "../utils/feedbackIntegrator.js";
 
 const FEEDBACK_PROMPT_TIMEOUT_MS = 180000;
@@ -455,6 +455,14 @@ export async function processSkryptCommand(message) {
             }.`,
           ];
           for (const row of history.slice(-3)) {
+            if (row.briefLink && extractGoogleDocId(row.briefLink)) {
+              try {
+                const text = await fetchDocTextCached(row.briefLink);
+                parts.push(`--- Wcześniejszy brief tego klienta (zabieg: ${row.zabieg || "?"}) ---\n${text}`);
+              } catch {
+                // best-effort - one unreadable historical doc shouldn't block generation
+              }
+            }
             if (row.skryptLink && extractGoogleDocId(row.skryptLink)) {
               try {
                 const text = await fetchDocTextCached(row.skryptLink);
@@ -474,20 +482,64 @@ export async function processSkryptCommand(message) {
         console.warn("Nie udało się pobrać historii klienta z bazy:", err.message);
       }
 
-      const sections = [`Opis zabiegu / USP (podany bezpośrednio, bez linku do briefu):\n${briefInputRaw}`];
+      // Only ask about genuine gaps: check which brief questions the pasted
+      // description and/or the client's history already answer, and skip
+      // those. A failed/malformed analysis is non-fatal - it just falls back
+      // to asking the full question bank, same as before this check existed.
+      const questions = template.briefQuestions;
+      let questionsToAsk = questions;
+      const foundAnswers = [];
+      try {
+        const coverage = await analyzeBriefCoverage({
+          questions,
+          description: briefInputRaw,
+          clientHistoryText: clientHistoryContext,
+        });
+        questionsToAsk = [];
+        coverage.forEach((r, i) => {
+          if (r.answered) {
+            foundAnswers.push({ question: questions[i], answer: r.suggestedAnswer || "(brak cytatu)", source: r.source });
+          } else {
+            questionsToAsk.push(questions[i]);
+          }
+        });
+      } catch (err) {
+        console.warn("Nie udało się przeanalizować pokrycia briefu, dopytam o wszystko:", err.message);
+      }
 
-      if (clientHistoryContext) {
-        sections.push(clientHistoryContext);
-      } else {
-        const numbered = template.briefQuestions.map((q, i) => `${i + 1}. ${q}`).join("\n");
+      if (foundAnswers.length) {
+        const summary = foundAnswers
+          .map(
+            (f) =>
+              `- ${f.question}\n  → ${f.answer} (źródło: ${f.source === "historia_klienta" ? "historia klienta" : "opis"})`
+          )
+          .join("\n");
+        await message.channel.send({
+          embeds: [infoEmbed(`🔎 Znalazłem odpowiedzi na część pytań automatycznie:\n${summary}`)],
+        });
+      }
+
+      const sections = [`Opis zabiegu / USP (podany bezpośrednio, bez linku do briefu):\n${briefInputRaw}`];
+      if (clientHistoryContext) sections.push(clientHistoryContext);
+      if (foundAnswers.length) {
+        sections.push(
+          "Automatycznie ustalone odpowiedzi (z opisu operatora lub historii klienta):\n" +
+            foundAnswers.map((f) => `${f.question}\n${f.answer}`).join("\n\n")
+        );
+      }
+
+      if (questionsToAsk.length) {
+        const numbered = questionsToAsk.map((q, i) => `${i + 1}. ${q}`).join("\n");
         const answers = await askText(
           message,
-          `🆕 Nie znaleziono jeszcze historii dla klienta "${klient}" w bazie. Odpowiedz w jednej wiadomości na poniższe pytania ` +
+          `🆕 Potrzebuję jeszcze paru informacji dla klienta "${klient}". Odpowiedz w jednej wiadomości na poniższe pytania ` +
             `(pomiń te, które nie dotyczą - napisz "brak"):\n\n${numbered}`
         );
         if (!answers) return;
-        sections.push(`Pytania briefowe (nowy klient):\n${numbered}\n\nOdpowiedzi:\n${answers}`);
+        sections.push(`Pytania briefowe (dopytane):\n${numbered}\n\nOdpowiedzi:\n${answers}`);
       }
+
+      sections.push(FIXED_CTA_NOTE);
 
       briefsText = sections.join("\n\n---\n\n");
     }

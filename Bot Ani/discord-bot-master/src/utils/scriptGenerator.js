@@ -72,6 +72,95 @@ const generateScriptVariantTool = {
   },
 };
 
+const ANALYZE_COVERAGE_TOOL_NAME = "analyze_brief_coverage";
+
+const BriefCoverageSchema = z.object({
+  results: z.array(
+    z.object({
+      question: z.string().min(1),
+      answered: z.boolean(),
+      source: z.enum(["opis", "historia_klienta", "brak"]),
+      suggestedAnswer: z.string().optional(),
+    })
+  ),
+});
+
+const analyzeBriefCoverageTool = {
+  name: ANALYZE_COVERAGE_TOOL_NAME,
+  description:
+    "Dla kazdego pytania briefowego okresla, czy odpowiedz juz wynika z opisu podanego przez operatora lub z historii klienta, " +
+    "i jesli tak - podaje krotka sugerowana odpowiedz (cytat/parafraze ze zrodla).",
+  input_schema: {
+    type: "object",
+    properties: {
+      results: {
+        type: "array",
+        description: "Jeden wpis na kazde pytanie, w tej samej kolejnosci co pytania w promptcie.",
+        items: {
+          type: "object",
+          properties: {
+            question: { type: "string", description: "Tresc pytania, dokladnie jak w promptcie." },
+            answered: { type: "boolean", description: "Czy odpowiedz da sie ustalic z opisu lub historii klienta." },
+            source: {
+              type: "string",
+              enum: ["opis", "historia_klienta", "brak"],
+              description: "Skad pochodzi odpowiedz: z opisu operatora, z historii klienta, albo brak (nie ustalono).",
+            },
+            suggestedAnswer: {
+              type: "string",
+              description: "Krotka sugerowana odpowiedz, jesli answered=true. Pomin, jesli answered=false.",
+            },
+          },
+          required: ["question", "answered", "source"],
+        },
+      },
+    },
+    required: ["results"],
+  },
+};
+
+/**
+ * Best-effort check of which of the new-client brief questions are already
+ * answered by the operator's pasted description and/or the client's prior
+ * briefs/scripts, so !skrypt only has to ask about genuine gaps instead of
+ * re-asking things already on record. Any failure here (bad response, schema
+ * mismatch) should be treated by the caller as "nothing resolved" - it's a
+ * shortcut, not a hard requirement.
+ */
+export async function analyzeBriefCoverage({ questions, description, clientHistoryText }) {
+  const parts = [`Opis zabiegu / USP podany przez operatora:\n${description}`];
+  if (clientHistoryText) {
+    parts.push(`Historia tego klienta w bazie (poprzednie briefy/skrypty):\n${clientHistoryText}`);
+  }
+  parts.push(
+    "Ponizsze pytania nalezy sprawdzic - dla kazdego okresl, czy odpowiedz juz wynika z powyzszych tresci " +
+      "(opisu operatora lub historii klienta), czy trzeba o nia dopytac operatora:\n" +
+      questions.map((q, i) => `${i + 1}. ${q}`).join("\n")
+  );
+  parts.push(
+    `Wywolaj narzedzie ${ANALYZE_COVERAGE_TOOL_NAME} z dokladnie ${questions.length} wpisami w results, po jednym na kazde pytanie, w tej samej kolejnosci.`
+  );
+
+  const response = await anthropic.messages.create({
+    model: GENERATION_MODEL,
+    max_tokens: 2048,
+    tools: [analyzeBriefCoverageTool],
+    tool_choice: { type: "tool", name: ANALYZE_COVERAGE_TOOL_NAME },
+    messages: [{ role: "user", content: parts.join("\n\n") }],
+  });
+
+  const toolUse = response.content.find((block) => block.type === "tool_use");
+  if (!toolUse) throw new Error("Brak odpowiedzi narzedzia przy analizie pokrycia briefu.");
+
+  const parsed = BriefCoverageSchema.safeParse(toolUse.input);
+  if (!parsed.success) throw new Error(formatZodErrorForClaude(parsed.error));
+  if (parsed.data.results.length !== questions.length) {
+    throw new Error("Liczba wynikow analizy pokrycia briefu nie zgadza sie z liczba pytan.");
+  }
+
+  return parsed.data.results;
+}
+
 function formatZodErrorForClaude(error) {
   return error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`).join("; ");
 }
