@@ -16,6 +16,52 @@ const RECORDING_INSTRUCTIONS_PLACEHOLDER = "Załącznik: wskazówki nagraniowe d
 // rulesText below so future generations immediately account for it.
 export const FEEDBACK_SECTION_HEADING = "Uwagi z feedbacku (na bieżąco)";
 
+// !skrypt lets the operator paste a treatment description + USP instead of a
+// brief link. For a brand-new client (no prior rows in the scripts sheet) the
+// bot then asks this bank of key questions to fill the gaps. Kept editable in
+// the template doc (as a numbered list right after this heading) so
+// non-devs can tweak the questions without a redeploy; DEFAULT_BRIEF_QUESTIONS
+// below is only the fallback used before that section exists in the doc.
+export const BRIEF_QUESTIONS_HEADING = "Kluczowe pytania briefowe (nowy klient)";
+
+const DEFAULT_BRIEF_QUESTIONS = [
+  "Na czym dokładnie polega zabieg/usługa i jaki problem klienta rozwiązuje?",
+  "Co wyróżnia tę ofertę na tle konkurencji (USP)?",
+  "Jakie są główne efekty/rezultaty i po jakim czasie widoczne?",
+  "Jaka jest cena regularna i promocyjna (jeśli dotyczy)?",
+  "Czy oferta jest ograniczona czasowo/ilościowo (np. \"do końca miesiąca\", \"pierwsze 20 osób\")?",
+  "Do kogo kierowana jest reklama - grupa docelowa, jej obawy/bolączki?",
+  "Jaki styl komunikacji ma być zastosowany: formalny / przyjazny / ekspercki / emocjonalny?",
+  "Jakie są dowody wiarygodności do wykorzystania (lata doświadczenia, liczba klientów, opinie, certyfikaty)?",
+  "Jakie ma być wezwanie do działania i sposób kontaktu (telefon, formularz, DM, link w bio)?",
+  "Czy są sformułowania/obietnice, których NIE wolno użyć (zastrzeżenia prawne/branżowe)?",
+];
+
+/**
+ * Reads the numbered list right after BRIEF_QUESTIONS_HEADING in the raw doc
+ * text. Falls back to DEFAULT_BRIEF_QUESTIONS if the section hasn't been
+ * added to the doc yet, so the feature works before anyone edits the doc.
+ */
+function extractBriefQuestions(fullText) {
+  const normalizedFull = stripPolishDiacritics(fullText);
+  const headingIndex = findMarker(normalizedFull, BRIEF_QUESTIONS_HEADING);
+  if (headingIndex === -1) return DEFAULT_BRIEF_QUESTIONS;
+
+  const afterHeading = fullText.slice(headingIndex + BRIEF_QUESTIONS_HEADING.length);
+  const lines = afterHeading.split("\n").map((l) => l.trim());
+  const questions = [];
+  for (const line of lines) {
+    if (line === "") {
+      if (questions.length) break;
+      continue;
+    }
+    const match = line.match(/^\d+[.)]\s*(.+)$/);
+    if (match) questions.push(match[1].trim());
+    else if (questions.length) break;
+  }
+  return questions.length ? questions : DEFAULT_BRIEF_QUESTIONS;
+}
+
 function stripPolishDiacritics(str) {
   return str
     .normalize("NFD")
@@ -62,6 +108,7 @@ export async function getScriptTemplate({ forceRefresh = false } = {}) {
   cachedTemplate = {
     rulesText,
     recordingInstructionsText: RECORDING_INSTRUCTIONS_PLACEHOLDER,
+    briefQuestions: extractBriefQuestions(fullText),
     fetchedAt: new Date(),
   };
 

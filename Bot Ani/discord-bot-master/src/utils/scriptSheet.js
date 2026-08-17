@@ -143,6 +143,32 @@ export async function findReferenceScriptForZabieg(spreadsheetId, zabieg) {
   };
 }
 
+/**
+ * Returns every past row for the given client (case-insensitive), used by
+ * !skrypt to detect whether a client already exists in the "database" (this
+ * sheet) so it can reuse their prior treatments/scripts as context instead of
+ * asking the new-client brief questions.
+ */
+export async function findClientHistory(spreadsheetId, klient) {
+  const { headerRowIndex, columnMap, sheetName } = await findHeaderRow(spreadsheetId);
+  const sheets = getSheetsClient();
+  const startRow = headerRowIndex + 2;
+
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${sheetName}!A${startRow}:Z`,
+  });
+
+  const rows = res.data.values || [];
+  const matches = rows.filter((row) => normalize(row[columnMap.klient]) === normalize(klient));
+
+  return matches.map((row) => ({
+    zabieg: row[columnMap.zabieg] || "",
+    briefLink: row[columnMap.briefLink] || "",
+    skryptLink: row[columnMap.skryptLink] || "",
+  }));
+}
+
 function todayDateStr() {
   const d = new Date();
   const dd = String(d.getDate()).padStart(2, "0");

@@ -10,6 +10,7 @@ import {
   listZabiegCategories,
   listKlienci,
   findReferenceScriptForZabieg,
+  findClientHistory,
   appendScriptRow,
 } from "../utils/scriptSheet.js";
 import { getScriptTemplate } from "../utils/scriptTemplate.js";
@@ -48,6 +49,17 @@ function infoEmbed(desc) {
 function extractGoogleDocId(url) {
   const match = (url || "").match(/\/d\/([a-zA-Z0-9_-]+)/);
   return match ? match[1] : null;
+}
+
+/**
+ * Distinguishes "link(s) to a brief doc" from "pasted treatment description +
+ * USP" in the same free-text prompt: true only if every comma-separated part
+ * is itself a URL. A pasted description containing commas (normal prose)
+ * therefore always falls through to the free-text branch.
+ */
+function looksLikeLinkList(text) {
+  const parts = (text || "").split(",").map((s) => s.trim()).filter(Boolean);
+  return parts.length > 0 && parts.every((p) => /^https?:\/\//i.test(p));
 }
 
 function parseInlineArgs(content) {
@@ -387,45 +399,17 @@ export async function processSkryptCommand(message) {
     }
     zabiegi = zabiegi.slice(0, MAX_TREATMENTS_PER_SCRIPT);
 
-    let briefLinksRaw = inline.brief;
-    if (!briefLinksRaw) {
-      briefLinksRaw = await askText(
-        message,
-        `Podaj link(i) do briefu (Google Doc) dla: ${zabiegi.join(", ")}.\n` +
-          `Jeśli brief jest wspólny, wklej jeden link. Jeśli osobne, wklej po przecinku w tej samej kolejności co zabiegi.`
-      );
-      if (!briefLinksRaw) return;
-    }
-    const briefLinks = briefLinksRaw.split(",").map((s) => s.trim()).filter(Boolean);
-    if (briefLinks.length === 0) {
-      return message.channel.send({ embeds: [errorEmbed("Nie podano żadnego linku do briefu.")] });
-    }
-
-    await message.channel.send({
-      embeds: [
-        new EmbedBuilder()
-          .setColor("#FFA500")
-          .setTitle("📝 Podsumowanie")
-          .addFields(
-            { name: "Klient", value: klient },
-            { name: "Zabiegi", value: zabiegi.join(", ") },
-            { name: "Liczba wariantów", value: String(warianty) },
-            { name: "Brief", value: briefLinks.join("\n") }
-          ),
-      ],
+    const templateMsg = await message.channel.send({
+      embeds: [infoEmbed("⏳ Pobieram szablon skryptów...")],
     });
-
-    const processingMsg = await message.channel.send({
-      embeds: [infoEmbed("⏳ Przetwarzanie: pobieram szablon, brief i przykład...")],
-    });
-
     let template;
     try {
       template = await getScriptTemplate();
     } catch (err) {
       console.error("Error fetching script template:", err);
-      return processingMsg.edit({ embeds: [errorEmbed(`Nie udało się pobrać szablonu skryptów: ${err.message}`)] });
+      return templateMsg.edit({ embeds: [errorEmbed(`Nie udało się pobrać szablonu skryptów: ${err.message}`)] });
     }
+    await templateMsg.delete().catch(() => {});
 
     const docTextCache = new Map();
     async function fetchDocTextCached(url) {
@@ -437,19 +421,113 @@ export async function processSkryptCommand(message) {
       return text;
     }
 
-    let briefsText;
-    try {
-      const briefTexts = await Promise.all(
-        zabiegi.map(async (zabieg, i) => {
-          const link = briefLinks[i] || briefLinks[0];
-          const text = await fetchDocTextCached(link);
-          return `Zabieg: ${zabieg}\nBrief:\n${text}`;
-        })
+    let briefInputRaw = inline.brief;
+    if (!briefInputRaw) {
+      briefInputRaw = await askText(
+        message,
+        `Podaj link(i) do briefu (Google Doc) dla: ${zabiegi.join(", ")}.\n` +
+          `Jeśli brief jest wspólny, wklej jeden link. Jeśli osobne, wklej po przecinku w tej samej kolejności co zabiegi.\n` +
+          `Zamiast linku możesz też wkleić krótki opis zabiegu i USP (co wyróżnia ofertę) - bot dociągnie resztę sam.`
       );
-      briefsText = briefTexts.join("\n\n---\n\n");
-    } catch (err) {
-      console.error("Error fetching brief docs:", err);
-      return processingMsg.edit({ embeds: [errorEmbed(`Nie udało się pobrać treści briefu: ${err.message}`)] });
+      if (!briefInputRaw) return;
+    }
+
+    const briefIsLinks = looksLikeLinkList(briefInputRaw);
+    const briefLinks = briefIsLinks ? briefInputRaw.split(",").map((s) => s.trim()).filter(Boolean) : [];
+    if (briefIsLinks && briefLinks.length === 0) {
+      return message.channel.send({ embeds: [errorEmbed("Nie podano żadnego linku do briefu.")] });
+    }
+
+    // Built now for the free-text branch (needs interactive Q&A before the
+    // summary is printed); left null for the link branch, where it's fetched
+    // right after the summary instead (matches the old flow/ordering).
+    let briefsText = null;
+
+    if (!briefIsLinks) {
+      let clientHistoryContext = null;
+      try {
+        const history = await findClientHistory(GOOGLE_SCRIPTS_SHEET_ID, klient);
+        if (history.length) {
+          const zabiegiList = [...new Set(history.map((h) => h.zabieg).filter(Boolean))];
+          const parts = [
+            `Klient "${klient}" ma już historię w bazie skryptów - wcześniejsze zabiegi: ${
+              zabiegiList.join(", ") || "brak danych"
+            }.`,
+          ];
+          for (const row of history.slice(-3)) {
+            if (row.skryptLink && extractGoogleDocId(row.skryptLink)) {
+              try {
+                const text = await fetchDocTextCached(row.skryptLink);
+                parts.push(
+                  `--- Wcześniejszy skrypt tego klienta (zabieg: ${
+                    row.zabieg || "?"
+                  }) - zachowaj ten sam ton i styl marki, NIE kopiuj tresci ---\n${text}`
+                );
+              } catch {
+                // best-effort - one unreadable historical doc shouldn't block generation
+              }
+            }
+          }
+          clientHistoryContext = parts.join("\n\n");
+        }
+      } catch (err) {
+        console.warn("Nie udało się pobrać historii klienta z bazy:", err.message);
+      }
+
+      const sections = [`Opis zabiegu / USP (podany bezpośrednio, bez linku do briefu):\n${briefInputRaw}`];
+
+      if (clientHistoryContext) {
+        sections.push(clientHistoryContext);
+      } else {
+        const numbered = template.briefQuestions.map((q, i) => `${i + 1}. ${q}`).join("\n");
+        const answers = await askText(
+          message,
+          `🆕 Nie znaleziono jeszcze historii dla klienta "${klient}" w bazie. Odpowiedz w jednej wiadomości na poniższe pytania ` +
+            `(pomiń te, które nie dotyczą - napisz "brak"):\n\n${numbered}`
+        );
+        if (!answers) return;
+        sections.push(`Pytania briefowe (nowy klient):\n${numbered}\n\nOdpowiedzi:\n${answers}`);
+      }
+
+      briefsText = sections.join("\n\n---\n\n");
+    }
+
+    const briefSummaryForEmbed = briefIsLinks ? briefLinks.join("\n") : briefInputRaw;
+    await message.channel.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor("#FFA500")
+          .setTitle("📝 Podsumowanie")
+          .addFields(
+            { name: "Klient", value: klient },
+            { name: "Zabiegi", value: zabiegi.join(", ") },
+            { name: "Liczba wariantów", value: String(warianty) },
+            {
+              name: briefIsLinks ? "Brief" : "Brief (opis, bez linku)",
+              value: briefSummaryForEmbed.slice(0, 1000) || "-",
+            }
+          ),
+      ],
+    });
+
+    const processingMsg = await message.channel.send({
+      embeds: [infoEmbed("⏳ Przetwarzanie: pobieram brief i przykład...")],
+    });
+
+    if (briefIsLinks) {
+      try {
+        const briefTexts = await Promise.all(
+          zabiegi.map(async (zabieg, i) => {
+            const link = briefLinks[i] || briefLinks[0];
+            const text = await fetchDocTextCached(link);
+            return `Zabieg: ${zabieg}\nBrief:\n${text}`;
+          })
+        );
+        briefsText = briefTexts.join("\n\n---\n\n");
+      } catch (err) {
+        console.error("Error fetching brief docs:", err);
+        return processingMsg.edit({ embeds: [errorEmbed(`Nie udało się pobrać treści briefu: ${err.message}`)] });
+      }
     }
 
     let referenceScriptText = null;
@@ -514,7 +592,7 @@ export async function processSkryptCommand(message) {
       await appendScriptRow(GOOGLE_SCRIPTS_SHEET_ID, {
         czyj: message.member?.displayName || message.author.username,
         klient,
-        briefLink: briefLinks[0],
+        briefLink: briefIsLinks ? briefLinks[0] : "Brief tekstowy (bez linku, opis + USP)",
         skryptLink: docUrl,
         zabieg: zabiegi.join(" + "),
       });
