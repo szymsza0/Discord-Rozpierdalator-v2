@@ -45,6 +45,20 @@ function truncate(str, max) {
   return str.length <= max ? str : `${str.slice(0, max - 3)}...`;
 }
 
+// Bezpieczna wartość pola embeda: Discord wymaga 1-1024 znaków.
+function fv(value) {
+  const s = String(value ?? "").trim();
+  return (s || "—").slice(0, 1024);
+}
+
+// Rozpakowanie zbiorczego błędu walidacji discord.js (@sapphire/shapeshift),
+// którego .message to samo "Received one or more errors".
+function errDetail(error) {
+  const subs = Array.isArray(error?.errors) ? error.errors.map((e) => e?.message ?? String(e)) : [];
+  const base = error?.message || String(error);
+  return subs.length ? `${base} — ${subs.join(" | ")}` : base;
+}
+
 function localSlug(text) {
   return (text || "")
     .normalize("NFD")
@@ -148,11 +162,20 @@ async function askText(message, promptText) {
 // askOptionsOrOther - resolves via one click, unique customId per
 // invocation so concurrent !lp runs in the same channel don't collide.
 async function askOptionsOrOther(message, { options, placeholder, otherPrompt }) {
-  const limitedOptions = options.slice(0, 24);
+  // Discord: label i value 1-100 znaków, oba wymagane. Puste / za długie wpisy
+  // z arkusza wywalały cały embed jako "Received one or more errors".
+  const limitedOptions = (options || [])
+    .map((o) => String(o ?? "").trim())
+    .filter(Boolean)
+    .slice(0, 24);
   const selectOptions = [
-    ...limitedOptions.map((o) => ({ label: o.slice(0, 100), value: o })),
+    ...limitedOptions.map((o) => ({ label: o.slice(0, 100), value: o.slice(0, 100) })),
     { label: "Inne (wpisz nowe)", value: OTHER_VALUE, description: "Wpisz wartość ręcznie" },
   ];
+
+  if (limitedOptions.length === 0) {
+    return askText(message, otherPrompt);
+  }
 
   const selectMenu = new StringSelectMenuBuilder()
     .setCustomId(`lp_select_${Date.now()}`)
@@ -321,10 +344,10 @@ async function runNewLpFlow(message, { inline }) {
         .setColor("#FFA500")
         .setTitle("📝 Podsumowanie (nowy szablon)")
         .addFields(
-          { name: "Zabieg", value: zabieg },
-          { name: "Brief", value: briefLink },
-          { name: "Media", value: `HERO: ${heroUrls.length} · przed/po: ${baUrls.length} · opinie: ${opUrls.length}` },
-          { name: "Formularz", value: truncate(formShortcode, 500) }
+          { name: "Zabieg", value: fv(zabieg) },
+          { name: "Brief", value: fv(briefLink) },
+          { name: "Media", value: fv(`HERO: ${heroUrls.length} · przed/po: ${baUrls.length} · opinie: ${opUrls.length}`) },
+          { name: "Formularz", value: fv(truncate(formShortcode, 500)) }
         ),
     ],
   });
@@ -488,9 +511,9 @@ async function runNewLpFlow(message, { inline }) {
     .setColor(placeholderLines.length ? "#FFA500" : "#00FF00")
     .setTitle(placeholderLines.length ? "🎊 LP (nowy szablon) wdrożona - są placeholdery" : "🎊 LP (nowy szablon) wdrożona")
     .addFields(
-      { name: "✅ Wdrożono", value: truncate(implementedLines.join("\n") || "—", 1000) },
-      { name: "⚠️ Do uzupełnienia", value: truncate(placeholderLines.join("\n") || "Brak - wszystko wypełnione.", 1000) },
-      { name: "🔗 Linki", value: `[Szkic strony](${page.editLink})\n📊 [Arkusz Baza LP](${SHEET_URL})` }
+      { name: "✅ Wdrożono", value: fv(truncate(implementedLines.join("\n"), 1000)) },
+      { name: "⚠️ Do uzupełnienia", value: fv(truncate(placeholderLines.join("\n") || "Brak - wszystko wypełnione.", 1000)) },
+      { name: "🔗 Linki", value: fv(`[Szkic strony](${page.editLink})\n📊 [Arkusz Baza LP](${SHEET_URL})`) }
     );
 
   await processingMsg.edit({ embeds: [finalEmbed] });
@@ -852,7 +875,7 @@ export async function processLpCommand(message) {
   } catch (error) {
     console.error("Error processing lp command:", error);
     try {
-      await message.channel.send({ embeds: [errorEmbed(`Wystąpił błąd: ${error.message}`)] });
+      await message.channel.send({ embeds: [errorEmbed(`Wystąpił błąd: ${truncate(errDetail(error), 1500)}`)] });
     } catch (sendError) {
       console.error("Failed to send error message:", sendError);
     }

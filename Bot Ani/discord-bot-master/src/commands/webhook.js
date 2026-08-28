@@ -23,10 +23,22 @@ const TEXT_PROMPT_TIMEOUT_MS = 90000;
 const TEMPLATE_PATH = fileURLToPath(new URL("../templates/webhook-cf7.tmpl.js", import.meta.url));
 
 function errorEmbed(desc) {
-  return new EmbedBuilder().setColor("#FF0000").setDescription(`❌ ${desc}`);
+  return new EmbedBuilder().setColor("#FF0000").setDescription(`❌ ${String(desc || "błąd").slice(0, 4000)}`);
 }
 function infoEmbed(desc) {
-  return new EmbedBuilder().setColor("#0079BF").setDescription(desc);
+  return new EmbedBuilder().setColor("#0079BF").setDescription(String(desc || "…").slice(0, 4000));
+}
+
+// Bezpieczna wartość pola embeda (Discord: 1-1024 znaków).
+function fv(value) {
+  const s = String(value ?? "").trim();
+  return (s || "—").slice(0, 1024);
+}
+
+function errDetail(error) {
+  const subs = Array.isArray(error?.errors) ? error.errors.map((e) => e?.message ?? String(e)) : [];
+  const base = error?.message || String(error);
+  return (subs.length ? `${base} — ${subs.join(" | ")}` : base).slice(0, 1500);
 }
 
 async function askText(message, promptText) {
@@ -173,15 +185,12 @@ export async function processWebhookCommand(message) {
       .setColor("#00FF00")
       .setTitle(result.created ? "🎣 Webhook: fragment utworzony" : "🎣 Webhook: fragment zaktualizowany")
       .addFields(
-        { name: "Fragment", value: `${snippetName} (#${result.id})` },
-        { name: "Webhook", value: webhookUrl },
-        { name: "Pole _formularz", value: formName, inline: true },
-        { name: "Slug", value: pageSlug || "(wszędzie)", inline: true },
+        { name: "Fragment", value: fv(`${snippetName} (#${result.id})`) },
+        { name: "Webhook", value: fv(webhookUrl) },
+        { name: "Pole _formularz", value: fv(formName), inline: true },
+        { name: "Slug", value: fv(pageSlug || "(wszędzie)"), inline: true },
         { name: "Scope", value: "site-footer (HTML)", inline: true },
-        {
-          name: "🔗 Linki",
-          value: `[Edytuj fragment](${result.editLink})`,
-        }
+        { name: "🔗 Linki", value: fv(`[Edytuj fragment](${result.editLink})`) }
       )
       .setFooter({ text: "1x na wypełnienie · dynamiczne pola · _formularz_nr / _formularz_sekcja" });
 
@@ -189,7 +198,7 @@ export async function processWebhookCommand(message) {
   } catch (error) {
     console.error("Error processing webhook command:", error);
     try {
-      await message.channel.send({ embeds: [errorEmbed(`Wystąpił błąd: ${error.message}`)] });
+      await message.channel.send({ embeds: [errorEmbed(`Wystąpił błąd: ${errDetail(error)}`)] });
     } catch (sendError) {
       console.error("Failed to send error message:", sendError);
     }
