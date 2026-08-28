@@ -13,6 +13,11 @@ GitHuba). Dlatego po skończonej zmianie:
    sprawdź status ostatniego deploya; jeśli nie - powiedz userowi, żeby
    zerknął w dashboard (albo `railway login`).
 
+**Railway buduje przez `npm ci`** - `package.json` i `package-lock.json` MUSZĄ
+być zsynchronizowane. Po dodaniu/zmianie zależności zawsze zrób
+`npm install` w `Bot Ani/discord-bot-master/` i **zacommituj `package-lock.json`
+razem** ze zmianą, inaczej build pada na "Missing: <pkg> from lock file".
+
 Nadal obowiązuje reszta zasad bezpieczeństwa: bez `--force`, bez `--amend`
 cudzych commitów, nie wciągaj niepowiązanych zmian do commita.
 Pliki `LP_COMMAND_SPEC.md` i `lp-system/` w repo są nieśledzone (scratch z
