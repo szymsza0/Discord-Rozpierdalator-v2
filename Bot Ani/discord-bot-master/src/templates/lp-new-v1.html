@@ -1,0 +1,548 @@
+<!--
+  SZABLON LP "nowy" (lp-new-v1) dla komendy !lp (opcja: Nowy szablon).
+  Cala strona = ten jeden plik, wstawiany w JEDEN blok Custom HTML (wp:html).
+  Kolejna strona = ten sam plik z podmieniona trescia / mediami / formularzem.
+
+  Renderowanie robi src/utils/lpNewTemplate.js:
+   - placeholdery skalarne w podwojnych klamrach (np. HERO_HEADLINE, OFFER_PRICE_PROMO),
+   - placeholder MEDIA dwukropek hero_image = URL zdjecia HERO,
+   - placeholder FORM_SHORTCODE = shortcode CF7 (ten sam w obu formularzach),
+   - regiony powtarzalne oznaczone komentarzami BEGIN:nazwa oraz END:nazwa.
+  Ten wiodacy komentarz jest usuwany przy ladowaniu szablonu (getNewLpTemplate).
+
+  FORMULARZ = SZKIELET. W CF7 trzymamy goly formularz bez wlasnych stylow i wrapperow.
+  Cala stylizacja pochodzi z reguł .zl-form-box .wpcf7-form w sekcji style ponizej.
+-->
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+  :root{
+    --zl-cream:#F7F2ED; --zl-cream-2:#EFE6DE; --zl-card:#FFFCF9;
+    --zl-ink:#3A2E2B; --zl-ink-soft:#6B5A54;
+    --zl-mauve:#8C7370; --zl-mauve-deep:#6F5A57; --zl-mauve-dark:#4E403D;
+    --zl-beige:#D9C3B2; --zl-beige-soft:#E9DACC;
+    --zl-sale:#B0261A; --zl-save:#3E7C4F;
+    --zl-radius:18px; --zl-shadow:0 8px 30px rgba(58,46,43,.08); --zl-shadow-hover:0 16px 44px rgba(58,46,43,.16); --zl-max:1120px;
+  }
+  html{scroll-behavior:smooth}
+  .zl-page{font-family:'Inter',system-ui,sans-serif;background:var(--zl-cream);color:var(--zl-ink);line-height:1.65;font-size:17px}
+  .zl-page *{margin:0;padding:0;box-sizing:border-box}
+  .zl-page h1,.zl-page h2,.zl-page h3,.zl-serif{font-family:'Cormorant Garamond',serif;line-height:1.18;color:var(--zl-ink)}
+  .zl-page h2{font-size:clamp(30px,4.2vw,44px);font-weight:600}
+  .zl-page h3{font-size:23px;font-weight:600}
+  .zl-page img{max-width:100%;display:block;border:none}
+  .zl-page a{color:inherit}
+  .zl-wrap{max-width:var(--zl-max);margin:0 auto;padding:0 22px}
+  .zl-page section{padding:76px 0}
+  .zl-page section[id],.zl-page header[id]{scroll-margin-top:88px}
+  .zl-center{text-align:center}
+  .zl-sub{color:var(--zl-ink-soft);max-width:700px;margin:14px auto 0}
+  .zl-eyebrow{display:inline-block;font-size:12.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--zl-mauve);font-weight:600;margin-bottom:14px}
+  .zl-divider{width:56px;height:3px;background:var(--zl-mauve);margin:0 auto 18px;border-radius:2px}
+  .zl-page button, .zl-page .zl-btn{text-transform:none !important;letter-spacing:normal !important}
+  .zl-page ul{list-style:none}
+  body{overflow-x:hidden}
+  .entry-content,.content-container,.site-container,article.entry,.single-content,.content-wrap{max-width:none !important;padding-left:0 !important;padding-right:0 !important;margin-left:0 !important;margin-right:0 !important}
+  .zl-page{width:100vw;position:relative;left:50%;margin-left:-50vw}
+  #masthead,.site-header,#wrapnav,.site-main-header-wrap{display:none !important}
+  .entry-header,.site-hero,#inner-wrap .entry-title,.page-title,.kadence-breadcrumbs,
+  .entry-hero,.entry-hero-container,.kadence-title-above,.titles-wrapper,.page-hero,header.entry-header,.kb-hero,
+  .entry-hero-layout-standard,.wp-block-kadence-header,.kadence-hero-section,.entry-header-wrap,.above-title-content{display:none !important;height:0 !important;min-height:0 !important;padding:0 !important;margin:0 !important;border:0 !important}
+  .content-area,#primary,#main,.site-main,.entry-content-wrap,.single-content,.content-container,.hentry{padding-top:0 !important;margin-top:0 !important}
+  .zl-btn{display:inline-block;background:var(--zl-mauve-deep);color:#fff !important;text-decoration:none !important;padding:16px 32px;border-radius:12px;font-weight:600;font-size:16px;border:none;cursor:pointer;transition:transform .22s ease, box-shadow .22s ease, background .22s ease}
+  .zl-btn:hover,.zl-btn:focus,.zl-btn:active{transform:translateY(-3px) scale(1.02);box-shadow:var(--zl-shadow-hover);background:var(--zl-mauve-dark);color:#fff !important}
+  .zl-cta-row{margin-top:30px}
+
+  /* NAV */
+  .zl-nav{position:sticky;top:0;z-index:50;background:rgba(247,242,237,.92);backdrop-filter:blur(8px);border-bottom:1px solid rgba(58,46,43,.08)}
+  .zl-nav__in{display:flex;align-items:center;justify-content:space-between;padding:14px 22px;max-width:var(--zl-max);margin:0 auto;gap:12px}
+  .zl-logo{font-family:'Cormorant Garamond',serif;font-weight:600;font-size:22px;letter-spacing:.12em;text-transform:uppercase;text-decoration:none !important;line-height:1.15;color:var(--zl-ink);min-width:0}
+  .zl-logo span{display:block;font-family:'Inter';font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--zl-mauve);font-weight:600}
+  .zl-nav__links{display:flex;gap:26px;align-items:center;list-style:none;margin:0;flex:none}
+  .zl-nav__links a{text-decoration:none !important;font-size:15px;font-weight:500;color:var(--zl-ink-soft);transition:color .2s}
+  .zl-nav__links a:hover{color:var(--zl-mauve)}
+  .zl-nav .zl-btn{padding:11px 20px;font-size:14.5px;white-space:nowrap;flex:none}
+  @media(max-width:900px){.zl-nav__links li:not(.zl-nav__cta){display:none}}
+  @media(max-width:560px){
+    .zl-nav__in{padding:12px 15px}
+    .zl-nav .zl-btn{padding:10px 13px;font-size:12.5px}
+    .zl-logo{font-size:18px}
+    .zl-logo span{font-size:9px;letter-spacing:.1em}
+  }
+
+  /* HERO */
+  .zl-hero{padding:64px 0 78px;background:linear-gradient(180deg,var(--zl-cream) 0%,var(--zl-cream-2) 100%)}
+  .zl-hero__grid{display:grid;grid-template-columns:1.05fr 0.95fr;gap:56px;align-items:center}
+  @media(max-width:900px){.zl-hero__grid{grid-template-columns:1fr;gap:34px}}
+  .zl-hero h1{font-size:clamp(34px,4.7vw,54px);font-weight:600;margin:14px 0 16px}
+  .zl-hero h1 em{font-style:italic;color:var(--zl-mauve-deep)}
+  .zl-hero__badge{display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--zl-beige);border-radius:999px;padding:8px 16px;font-size:12.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--zl-ink-soft);font-weight:600}
+  .zl-hero__badge b{color:var(--zl-mauve)}
+  .zl-hero p.lead{font-size:18px;color:var(--zl-ink-soft)}
+  .zl-hero__note{margin:18px 0 22px;background:#FBF5EE;border-left:4px solid var(--zl-mauve);padding:14px 18px;border-radius:10px;font-size:15px;color:var(--zl-ink-soft)}
+  @media(max-width:900px){.zl-hero__media{order:-1;margin:0 auto}}
+  .zl-img{width:100%;border-radius:24px;object-fit:cover;display:block;box-shadow:var(--zl-shadow);transition:transform .25s ease, box-shadow .25s ease}
+  .zl-img:hover{transform:scale(1.015);box-shadow:var(--zl-shadow-hover)}
+  .zl-ph--portrait{aspect-ratio:4/5;max-width:430px;margin:0 auto}
+
+  /* TRUST STRIP */
+  .zl-trust{background:var(--zl-mauve-deep);color:#fff;padding:26px 0}
+  .zl-trust__grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;text-align:center}
+  .zl-trust strong{display:block;font-family:'Cormorant Garamond',serif;font-size:22px;font-weight:600}
+  .zl-trust span{display:block;margin-top:2px;font-size:13px;color:var(--zl-beige-soft)}
+  @media(max-width:640px){.zl-trust__grid{grid-template-columns:1fr;gap:12px}}
+
+  /* CARDS + CAROUSEL */
+  .zl-card{background:var(--zl-card);border-radius:var(--zl-radius);padding:28px;box-shadow:var(--zl-shadow);transition:transform .25s ease, box-shadow .25s ease}
+  .zl-card:hover{transform:translateY(-5px);box-shadow:var(--zl-shadow-hover)}
+  .zl-carousel{position:relative;margin-top:40px}
+  .zl-track{display:flex;gap:22px;overflow-x:auto;scroll-snap-type:x mandatory;scroll-behavior:smooth;-webkit-overflow-scrolling:touch;align-items:flex-start;padding:4px 2px 12px;scrollbar-width:thin}
+  .zl-track::-webkit-scrollbar{height:8px}
+  .zl-track::-webkit-scrollbar-track{background:transparent}
+  .zl-track::-webkit-scrollbar-thumb{background:rgba(58,46,43,.22);border-radius:8px}
+  .zl-slide{flex:0 0 calc((100% - 44px)/3);scroll-snap-align:start}
+  @media(max-width:900px){.zl-slide{flex-basis:calc((100% - 22px)/2)}}
+  @media(max-width:560px){.zl-slide{flex-basis:100%}}
+  .zl-slide img{width:100%;height:360px;object-fit:contain;background:#fff;border-radius:16px;box-shadow:var(--zl-shadow);transition:transform .25s ease, box-shadow .25s ease}
+  @media(max-width:900px){.zl-slide img{height:320px}}
+  @media(max-width:560px){.zl-slide img{height:360px}}
+  .zl-slide img:hover{transform:scale(1.02);box-shadow:var(--zl-shadow-hover)}
+  .zl-slide b{display:block;margin-top:12px;text-align:center;color:var(--zl-mauve-deep);font-size:14px;letter-spacing:.08em}
+  .zl-arrow{position:absolute;top:42%;transform:translateY(-50%);z-index:5;width:46px;height:46px;border-radius:50%;background:var(--zl-mauve-deep);color:#fff;border:none;cursor:pointer;font-size:24px;line-height:1;display:flex;align-items:center;justify-content:center;box-shadow:var(--zl-shadow);transition:transform .2s ease, background .2s ease}
+  .zl-arrow:hover,.zl-arrow:focus{background:var(--zl-mauve-dark);transform:translateY(-50%) scale(1.06)}
+  .zl-arrow--prev{left:-10px}
+  .zl-arrow--next{right:-10px}
+  @media(max-width:560px){.zl-arrow{width:40px;height:40px;font-size:20px}.zl-arrow--prev{left:2px}.zl-arrow--next{right:2px}}
+
+  /* TO DLA CIEBIE */
+  .zl-fit__grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:36px;text-align:left}
+  @media(max-width:700px){.zl-fit__grid{grid-template-columns:1fr}}
+  .zl-fit__item{position:relative;padding:18px 18px 18px 46px;background:var(--zl-card);border:1px solid rgba(58,46,43,.08);border-radius:14px;box-shadow:var(--zl-shadow);font-size:15px;color:var(--zl-ink-soft)}
+  .zl-fit__item::before{content:"\2713";position:absolute;left:15px;top:17px;width:22px;height:22px;border-radius:50%;background:var(--zl-beige-soft);color:var(--zl-mauve-deep);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800}
+
+  /* OFERTA */
+  .zl-count-mini{display:inline-flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--zl-beige);border-radius:999px;padding:10px 22px;box-shadow:var(--zl-shadow);margin-top:18px}
+  .zl-count-mini .lbl{font-size:13.5px;color:var(--zl-ink-soft);font-weight:600}
+  .zl-count-mini .time{font-family:'Inter',sans-serif;font-weight:700;font-size:22px;color:var(--zl-mauve-deep);font-variant-numeric:tabular-nums;letter-spacing:.02em}
+  .zl-two{display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:start;margin-top:30px;text-align:left}
+  @media(max-width:900px){.zl-two{grid-template-columns:1fr}}
+  .zl-offer-checks{list-style:none;margin:10px 0 0}
+  .zl-offer-checks li{display:flex;align-items:baseline;gap:10px;font-size:14.5px;color:var(--zl-ink);padding:10px 0;border-bottom:1px solid rgba(58,46,43,.06)}
+  .zl-offer-checks li::before{content:"\2713";color:var(--zl-mauve);font-weight:700;flex:none}
+  .zl-bonus{margin:16px 0 0;background:#FBF5EE;border:1px solid var(--zl-beige);border-radius:14px;padding:16px 20px;font-size:14.5px;color:var(--zl-ink-soft)}
+  .zl-bonus b{color:var(--zl-mauve-deep)}
+  .zl-price{margin-top:20px}
+  .zl-price .old{display:block;color:var(--zl-ink-soft);font-weight:600;font-size:15px;margin-bottom:4px}
+  .zl-price .old s{color:var(--zl-sale);font-weight:800;font-size:27px;text-decoration-thickness:2px}
+  .zl-price .new{display:block;font-family:'Cormorant Garamond',serif;font-size:44px;font-weight:700;color:var(--zl-save);margin-top:2px}
+  .zl-price .promo{display:block;margin-top:12px;color:#2E7D5B;font-weight:700;font-size:15px}
+
+  /* FORM BOX + SZKIELET CF7 (cała stylizacja formularza jest TU) */
+  .zl-form-box{background:var(--zl-card);border-radius:var(--zl-radius);box-shadow:var(--zl-shadow-hover);padding:26px}
+  .zl-form-box>h3{color:var(--zl-ink);text-align:center;margin-bottom:6px}
+  .zl-form-box>p{color:var(--zl-ink-soft);text-align:center;font-size:14px;margin-bottom:14px}
+  .zl-form-box .wpcf7{max-width:none}
+  .zl-form-box .wpcf7-form p{margin:0 0 16px}
+  .zl-form-box .wpcf7-form label{display:block;font-weight:600;color:var(--zl-ink);font-size:.92rem}
+  .zl-form-box .wpcf7-form label .wpcf7-form-control-wrap{display:block;margin-top:8px}
+  .zl-form-box .wpcf7-form input[type=text],
+  .zl-form-box .wpcf7-form input[type=email],
+  .zl-form-box .wpcf7-form input[type=tel],
+  .zl-form-box .wpcf7-form input[type=date],
+  .zl-form-box .wpcf7-form input[type=number],
+  .zl-form-box .wpcf7-form select,
+  .zl-form-box .wpcf7-form textarea{
+    width:100%;background:#FBF5EE;border:1.5px solid var(--zl-beige);color:var(--zl-ink);
+    font-family:'Inter',sans-serif;font-size:1rem;padding:14px 18px;border-radius:12px;box-sizing:border-box;
+    transition:background .25s ease,border-color .25s ease,box-shadow .25s ease}
+  .zl-form-box .wpcf7-form textarea{min-height:120px;resize:vertical}
+  .zl-form-box .wpcf7-form select,
+  .zl-form-box .wpcf7-form select option{color:var(--zl-ink)}
+  .zl-form-box .wpcf7-form input::placeholder,
+  .zl-form-box .wpcf7-form textarea::placeholder{color:var(--zl-ink-soft);opacity:.7}
+  .zl-form-box .wpcf7-form input:focus,
+  .zl-form-box .wpcf7-form select:focus,
+  .zl-form-box .wpcf7-form textarea:focus{outline:none;background:#fff;border-color:var(--zl-mauve);box-shadow:0 0 0 3px rgba(140,115,112,.15)}
+  .zl-form-box .wpcf7-form .zl-consent,
+  .zl-form-box .wpcf7-form label.zl-consent{font-weight:400;font-size:.82rem;color:var(--zl-ink-soft);line-height:1.5}
+  .zl-form-box .wpcf7-form input[type=checkbox]{width:auto;margin-right:10px;accent-color:var(--zl-mauve-deep);transform:scale(1.15);cursor:pointer}
+  .zl-form-box .wpcf7-form input[type=submit]{
+    width:100%;background:var(--zl-mauve-deep);color:#fff;font-family:'Inter',sans-serif;font-weight:600;font-size:1.05rem;
+    padding:16px 32px;border:none;border-radius:12px;cursor:pointer;box-shadow:var(--zl-shadow);-webkit-appearance:none;
+    transition:transform .22s ease,box-shadow .22s ease,background .22s ease}
+  .zl-form-box .wpcf7-form input[type=submit]:hover{background:var(--zl-mauve-dark);transform:translateY(-3px) scale(1.02);box-shadow:var(--zl-shadow-hover)}
+  .zl-form-box .wpcf7-form .wpcf7-spinner{margin:8px auto 0;display:block}
+  .zl-form-box .wpcf7-not-valid-tip{color:#C0392B;font-size:.8rem;font-weight:600;margin-top:6px}
+  .zl-form-box .wpcf7-response-output{border-radius:10px;border-color:var(--zl-beige) !important;font-size:14px;color:var(--zl-ink);margin:12px 0 0;padding:12px 16px}
+
+  /* DLACZEGO MY */
+  .zl-why__grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:40px}
+  @media(max-width:900px){.zl-why__grid{grid-template-columns:1fr 1fr}}
+  @media(max-width:560px){.zl-why__grid{grid-template-columns:1fr}}
+  .zl-why .ico{width:52px;height:52px;border-radius:50%;background:var(--zl-beige-soft);color:var(--zl-mauve-deep);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:800;margin:0 auto 16px}
+  .zl-why h3{font-size:20px;margin-bottom:8px}
+  .zl-why p{color:var(--zl-ink-soft);font-size:15px}
+
+  /* JAK DZIALA */
+  .zl-how__grid{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;margin-top:38px;text-align:left}
+  @media(max-width:850px){.zl-how__grid{grid-template-columns:1fr;gap:26px}}
+  .zl-how__text p{color:var(--zl-ink-soft);margin-top:12px}
+  .zl-how__step{display:grid;grid-template-columns:44px 1fr;gap:14px;padding:18px;background:var(--zl-card);border-radius:14px;box-shadow:var(--zl-shadow);margin-bottom:12px}
+  .zl-how__num{width:40px;height:40px;border-radius:50%;background:var(--zl-mauve-deep);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700}
+  .zl-how__step h3{font-size:19px;margin-bottom:2px}
+  .zl-how__step p{font-size:14.5px;color:var(--zl-ink-soft)}
+
+  /* OPINIE */
+  .zl-reviews__grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:40px;text-align:left}
+  @media(max-width:860px){.zl-reviews__grid{grid-template-columns:1fr 1fr}}
+  @media(max-width:560px){.zl-reviews__grid{grid-template-columns:1fr}}
+  .zl-review{background:var(--zl-card);border:1px solid rgba(58,46,43,.08);border-radius:16px;box-shadow:var(--zl-shadow);padding:24px;display:flex;flex-direction:column}
+  .zl-review .stars{color:#C79A3A;letter-spacing:2px;font-size:15px}
+  .zl-review .q{font-family:'Cormorant Garamond',serif;font-size:21px;line-height:1.3;color:var(--zl-ink);font-weight:600;margin:10px 0 12px}
+  .zl-review .who{font-size:13px;font-weight:700;color:var(--zl-mauve-deep);letter-spacing:.04em;margin-bottom:14px}
+  .zl-review img{width:100%;height:auto;border-radius:12px;box-shadow:0 5px 18px rgba(58,46,43,.10);margin-top:auto}
+
+  /* MID CTA */
+  .zl-midcta{background:var(--zl-beige-soft);padding:54px 0}
+  .zl-midcta__in{display:flex;align-items:center;justify-content:space-between;gap:26px;flex-wrap:wrap}
+  .zl-midcta h2{font-size:clamp(26px,3.4vw,36px)}
+  .zl-midcta p{color:var(--zl-ink-soft);margin-top:6px}
+  @media(max-width:700px){.zl-midcta__in{flex-direction:column;text-align:center}.zl-midcta .zl-btn{width:100%;text-align:center}}
+
+  /* FAQ */
+  .zl-faq-list{max-width:780px;margin:40px auto 0}
+  .zl-faq{background:var(--zl-card);border-radius:14px;box-shadow:var(--zl-shadow);margin-bottom:14px;overflow:hidden;transition:box-shadow .22s ease}
+  .zl-faq:hover{box-shadow:var(--zl-shadow-hover)}
+  .zl-faq summary{cursor:pointer;list-style:none;font-family:'Cormorant Garamond',serif;font-size:19px;font-weight:600;color:var(--zl-ink);padding:20px 56px 20px 24px;position:relative}
+  .zl-faq summary::-webkit-details-marker{display:none}
+  .zl-faq summary::after{content:"+";position:absolute;right:22px;top:50%;transform:translateY(-50%);width:28px;height:28px;border-radius:50%;background:var(--zl-beige-soft);color:var(--zl-mauve-deep);display:flex;align-items:center;justify-content:center;font-family:'Inter';font-size:18px}
+  .zl-faq[open] summary::after{content:"\2013"}
+  .zl-faq .answer p{padding:0 24px 22px;color:var(--zl-ink-soft);font-size:15.5px}
+
+  /* FINAL */
+  .zl-final{background:var(--zl-mauve-dark);color:#fff;padding:88px 0}
+  .zl-final h2,.zl-final h3.zl-serif{color:#fff}
+  .zl-final .zl-sub{color:var(--zl-beige-soft)}
+  .zl-final__grid{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;margin-top:40px}
+  @media(max-width:900px){.zl-final__grid{grid-template-columns:1fr}}
+  .zl-final .zl-eyebrow{color:var(--zl-beige)}
+  .zl-contact{list-style:none;margin-top:22px}
+  .zl-contact li{display:flex;gap:12px;align-items:center;margin-bottom:14px;font-size:16px}
+  .zl-contact .dot{width:9px;height:9px;border-radius:50%;background:var(--zl-beige);flex:none}
+  .zl-final__price{margin-top:20px;padding:16px 18px;border:1px solid rgba(255,255,255,.16);border-radius:12px;background:rgba(255,255,255,.06);font-size:15px;color:var(--zl-beige-soft)}
+  .zl-final__price s{color:#F1A99E;font-weight:800;font-size:22px;text-decoration-thickness:2px}
+  .zl-final__price b{color:#fff;font-size:26px;font-family:'Cormorant Garamond',serif;font-weight:700}
+  .zl-final .zl-form-box{background:#fff}
+  .zl-final .zl-form-box>h3{color:var(--zl-ink)}
+
+  /* FOOTER */
+  .zl-footer{background:#3B302D;color:var(--zl-beige);text-align:center;padding:36px 22px;font-size:13.5px}
+  .zl-footer b{color:#fff;font-family:'Cormorant Garamond',serif;font-size:18px;letter-spacing:.12em;text-transform:uppercase;display:block;margin-bottom:6px}
+
+  /* REVEAL */
+  .zl-reveal{transition:opacity .6s ease, transform .6s ease}
+  .zl-js .zl-reveal{opacity:0;transform:translateY(18px)}
+  .zl-js .zl-reveal.in{opacity:1;transform:none}
+  .zl-page :focus-visible{outline:3px solid var(--zl-mauve);outline-offset:2px}
+  @media (prefers-reduced-motion: reduce){.zl-page *{transition:none!important;animation:none!important}html{scroll-behavior:auto}.zl-js .zl-reveal{opacity:1;transform:none}}
+</style>
+
+<script>document.documentElement.classList.add('zl-js');</script>
+
+<div class="zl-page">
+
+<nav class="zl-nav">
+  <div class="zl-nav__in">
+    <a href="#top" class="zl-logo">{{NAV_LOGO}}<span>{{NAV_LOGO_SUB}}</span></a>
+    <ul class="zl-nav__links">
+      <li><a href="#to-dla-ciebie">To dla Ciebie</a></li>
+      <li><a href="#efekty">Efekty</a></li>
+      <li><a href="#opinie">Opinie</a></li>
+      <li><a href="#oferta">Oferta</a></li>
+      <li><a href="#faq">FAQ</a></li>
+      <li class="zl-nav__cta"><a href="#form-top" class="zl-btn">{{NAV_CTA}}</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- ============================ HERO ============================ -->
+<header class="zl-hero" id="top">
+  <div class="zl-wrap zl-hero__grid">
+    <div>
+      <span class="zl-hero__badge"><b>&#10022;</b> {{HERO_BADGE}}</span>
+      <h1>{{HERO_HEADLINE}} <em>{{HERO_HEADLINE_EM}}</em></h1>
+      <p class="lead">{{HERO_LEAD}}</p>
+      <p class="zl-hero__note">{{HERO_NOTE}}</p>
+      <a href="#form-top" class="zl-btn">{{HERO_CTA}} &rarr;</a>
+    </div>
+    <div class="zl-hero__media">
+      <img src="{{MEDIA:hero_image}}" alt="{{HERO_HEADLINE}}" class="zl-img zl-ph--portrait">
+    </div>
+  </div>
+</header>
+
+<!-- ============================ TRUST STRIP ============================ -->
+<section class="zl-trust">
+  <div class="zl-wrap zl-trust__grid">
+    <!--BEGIN:trust-->
+    <div><strong>{{T_STRONG}}</strong><span>{{T_LABEL}}</span></div>
+    <!--END:trust-->
+  </div>
+</section>
+
+<!-- ============================ TO DLA CIEBIE ============================ -->
+<section id="to-dla-ciebie">
+  <div class="zl-wrap zl-center">
+    <div class="zl-divider"></div>
+    <h2>{{FIT_TITLE}}</h2>
+    <p class="zl-sub">{{FIT_SUBTITLE}}</p>
+    <div class="zl-fit__grid">
+      <!--BEGIN:fit-->
+      <div class="zl-fit__item zl-reveal">{{FIT_ITEM}}</div>
+      <!--END:fit-->
+    </div>
+    <div class="zl-cta-row"><a href="#form-top" class="zl-btn">{{FIT_CTA}} &rarr;</a></div>
+  </div>
+</section>
+
+<!-- ============================ EFEKTY (pierwsze przed/po, PRZED ofertą) ============================ -->
+<section id="efekty" style="background:var(--zl-cream-2)">
+  <div class="zl-wrap zl-center">
+    <div class="zl-divider"></div>
+    <h2>{{EFEKTY_TITLE}}</h2>
+    <p class="zl-sub">{{EFEKTY_SUB}}</p>
+    <div class="zl-carousel" id="efekty-carousel-1">
+      <button class="zl-arrow zl-arrow--prev" type="button" aria-label="Poprzednie zdjęcie">&#8249;</button>
+      <div class="zl-track">
+        <!--BEGIN:beforeAfter-->
+        <div class="zl-slide"><img src="{{BA_URL}}" alt="Efekt zabiegu - przed i po" loading="lazy"><b>PRZED &rarr; PO</b></div>
+        <!--END:beforeAfter-->
+      </div>
+      <button class="zl-arrow zl-arrow--next" type="button" aria-label="Następne zdjęcie">&#8250;</button>
+    </div>
+    <div class="zl-cta-row"><a href="#form-top" class="zl-btn">{{EFEKTY_CTA}} &rarr;</a></div>
+  </div>
+</section>
+
+<!-- ============================ OFERTA + FORMULARZ #1 ============================ -->
+<section id="oferta">
+  <div class="zl-wrap zl-center">
+    <div class="zl-divider"></div>
+    <h2>{{OFFER_TITLE}}</h2>
+    <p class="zl-sub">{{OFFER_SUB}}</p>
+    <div class="zl-count-mini"><span class="lbl">&#9200; Oferta kończy się za:</span> <span class="time" id="zl-time" data-mins="{{OFFER_COUNTDOWN_MINUTES}}">15:00</span></div>
+    <div class="zl-two">
+      <div class="zl-card zl-reveal">
+        <span class="zl-eyebrow">{{OFFER_EYEBROW}}</span>
+        <h3 class="zl-serif">{{OFFER_PRODUCT_TITLE}}</h3>
+        <ul class="zl-offer-checks">
+          <!--BEGIN:offerIncludes-->
+          <li>{{OFFER_INCLUDE}}</li>
+          <!--END:offerIncludes-->
+        </ul>
+        <div class="zl-bonus">{{OFFER_BONUS_LINE}}</div>
+        <div class="zl-price">
+          <span class="old">Cena regularna: <s>{{OFFER_PRICE_REGULAR}}</s></span>
+          <span class="new">{{OFFER_PRICE_PROMO_LABEL}}: {{OFFER_PRICE_PROMO}}</span>
+          <span class="promo">{{OFFER_SAVINGS_LINE}}</span>
+        </div>
+      </div>
+      <div class="zl-form-box zl-reveal" id="form-top">
+        <h3 class="zl-serif">{{OFFER_FORM_TITLE}}</h3>
+        <p>{{OFFER_FORM_SUB}}</p>
+        {{FORM_SHORTCODE}}
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ OPINIE (tuż po pierwszym formularzu) ============================ -->
+<section id="opinie">
+  <div class="zl-wrap zl-center">
+    <div class="zl-divider"></div>
+    <h2>{{OPINIE_TITLE}}</h2>
+    <p class="zl-sub">{{OPINIE_SUB}}</p>
+    <div class="zl-reviews__grid">
+      <!--BEGIN:opinie-->
+      <article class="zl-review zl-reveal">
+        <span class="stars">&#9733;&#9733;&#9733;&#9733;&#9733;</span>
+        <p class="q">&bdquo;{{OP_QUOTE}}&rdquo;</p>
+        <span class="who">{{OP_NAME}}</span>
+        <img src="{{OP_IMAGE}}" alt="Opinia klientki" loading="lazy">
+      </article>
+      <!--END:opinie-->
+    </div>
+    <div class="zl-cta-row"><a href="#form-final" class="zl-btn">{{OPINIE_CTA}} &rarr;</a></div>
+  </div>
+</section>
+
+<!-- ============================ DLACZEGO MY ============================ -->
+<section id="dlaczego">
+  <div class="zl-wrap zl-center">
+    <div class="zl-divider"></div>
+    <h2>{{WHY_TITLE}}</h2>
+    <p class="zl-sub">{{WHY_SUB}}</p>
+    <div class="zl-why__grid zl-why">
+      <!--BEGIN:why-->
+      <div class="zl-card zl-reveal"><div class="ico">&#10022;</div><h3>{{WHY_CARD_TITLE}}</h3><p>{{WHY_CARD_BODY}}</p></div>
+      <!--END:why-->
+    </div>
+    <div class="zl-cta-row"><a href="#form-final" class="zl-btn">{{WHY_CTA}} &rarr;</a></div>
+  </div>
+</section>
+
+<!-- ============================ JAK DZIALA (technologia na końcu) ============================ -->
+<section id="jak-dziala" style="background:var(--zl-cream-2)">
+  <div class="zl-wrap">
+    <div class="zl-center">
+      <div class="zl-divider"></div>
+      <h2>{{HOW_TITLE}}</h2>
+      <p class="zl-sub">{{HOW_SUB}}</p>
+    </div>
+    <div class="zl-how__grid">
+      <div class="zl-how__text">
+        <h3 class="zl-serif" style="font-size:30px">{{HOW_LEAD_TITLE}}</h3>
+        <!--BEGIN:howParas-->
+        <p>{{HOW_PARA}}</p>
+        <!--END:howParas-->
+        <div class="zl-cta-row"><a href="#form-final" class="zl-btn">{{HOW_CTA}} &rarr;</a></div>
+      </div>
+      <div>
+        <!--BEGIN:howSteps-->
+        <div class="zl-how__step zl-reveal"><div class="zl-how__num">{{STEP_N}}</div><div><h3>{{STEP_TITLE}}</h3><p>{{STEP_BODY}}</p></div></div>
+        <!--END:howSteps-->
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ METAMORFOZY (drugie przed/po) ============================ -->
+<section id="metamorfozy">
+  <div class="zl-wrap zl-center">
+    <div class="zl-divider"></div>
+    <h2>{{META_TITLE}}</h2>
+    <p class="zl-sub">{{META_SUB}}</p>
+    <div class="zl-carousel" id="efekty-carousel-2">
+      <button class="zl-arrow zl-arrow--prev" type="button" aria-label="Poprzednie zdjęcie">&#8249;</button>
+      <div class="zl-track">
+        <!--BEGIN:beforeAfter-->
+        <div class="zl-slide"><img src="{{BA_URL}}" alt="Efekt zabiegu - przed i po" loading="lazy"><b>PRZED &rarr; PO</b></div>
+        <!--END:beforeAfter-->
+      </div>
+      <button class="zl-arrow zl-arrow--next" type="button" aria-label="Następne zdjęcie">&#8250;</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ MID CTA ============================ -->
+<section class="zl-midcta">
+  <div class="zl-wrap zl-midcta__in">
+    <div>
+      <h2 class="zl-serif">{{MIDCTA_TITLE}}</h2>
+      <p>{{MIDCTA_BODY}}</p>
+    </div>
+    <a href="#form-final" class="zl-btn">{{MIDCTA_CTA}} &rarr;</a>
+  </div>
+</section>
+
+<!-- ============================ FAQ (obiekcje zakupowe) ============================ -->
+<section id="faq">
+  <div class="zl-wrap zl-center">
+    <div class="zl-divider"></div>
+    <h2>{{FAQ_TITLE}}</h2>
+    <p class="zl-sub">{{FAQ_SUB}}</p>
+    <div class="zl-faq-list" style="text-align:left">
+      <!--BEGIN:faq-->
+      <details class="zl-faq"><summary>{{FAQ_Q}}</summary><div class="answer"><p>{{FAQ_A}}</p></div></details>
+      <!--END:faq-->
+    </div>
+    <div class="zl-cta-row"><a href="#form-final" class="zl-btn">{{FAQ_CTA}} &rarr;</a></div>
+  </div>
+</section>
+
+<!-- ============================ FINAL CTA + FORMULARZ #2 ============================ -->
+<section id="rezerwacja" class="zl-final">
+  <div class="zl-wrap">
+    <div class="zl-center">
+      <span class="zl-eyebrow">{{FINAL_EYEBROW}}</span>
+      <h2 class="zl-serif">{{FINAL_TITLE}}</h2>
+      <p class="zl-sub">{{FINAL_SUB}}</p>
+    </div>
+    <div class="zl-final__grid">
+      <div>
+        <span class="zl-eyebrow">{{FINAL_INFO_EYEBROW}}</span>
+        <h3 class="zl-serif" style="font-size:32px">{{FINAL_INFO_TITLE}}</h3>
+        <ul class="zl-contact">
+          <!--BEGIN:contact-->
+          <li><span class="dot"></span> {{CONTACT_LINE}}</li>
+          <!--END:contact-->
+        </ul>
+        <div class="zl-final__price">{{FINAL_PRICE_LINE}}</div>
+      </div>
+      <div class="zl-form-box" id="form-final">
+        <h3 class="zl-serif">{{FINAL_FORM_TITLE}}</h3>
+        <p>{{FINAL_FORM_SUB}}</p>
+        {{FORM_SHORTCODE}}
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="zl-footer">
+  <b>{{FOOTER_BRAND}}</b>
+  {{FOOTER_LINE}}
+  <p style="margin-top:12px;opacity:.7">{{FOOTER_COPYRIGHT}}</p>
+</footer>
+
+</div>
+
+<script>
+(function(){
+  function all(){var n=document.querySelectorAll('.zl-reveal');for(var i=0;i<n.length;i++)n[i].classList.add('in');}
+  try{
+    if('IntersectionObserver' in window){
+      var o=new IntersectionObserver(function(en){en.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');o.unobserve(e.target);}});},{threshold:.08});
+      var els=document.querySelectorAll('.zl-reveal');
+      for(var i=0;i<els.length;i++)o.observe(els[i]);
+      setTimeout(all,1800);
+    } else { all(); }
+  }catch(e){ all(); }
+})();
+</script>
+
+<script>
+(function(){
+  var el=document.getElementById('zl-time'); if(!el) return;
+  var mins=parseInt(el.getAttribute('data-mins')||'15',10)||15;
+  var end=Date.now()+mins*60*1000;
+  function t(){var d=Math.max(0,end-Date.now());
+    var m=String(Math.floor(d/60000)).padStart(2,'0');
+    var s=String(Math.floor(d/1000)%60).padStart(2,'0');
+    el.textContent=m+':'+s; if(d<=0)clearInterval(iv);}
+  t(); var iv=setInterval(t,1000);
+})();
+</script>
+
+<script>
+document.querySelectorAll('.zl-carousel').forEach(function(root){
+  var track=root.querySelector('.zl-track'); if(!track) return;
+  var prev=root.querySelector('.zl-arrow--prev');
+  var next=root.querySelector('.zl-arrow--next');
+  var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function step(){var s=track.querySelector('.zl-slide'); if(!s) return track.clientWidth;
+    var cs=getComputedStyle(track); var gap=parseFloat(cs.columnGap||cs.gap)||22;
+    return s.getBoundingClientRect().width+gap;}
+  function atEnd(){return track.scrollLeft+track.clientWidth>=track.scrollWidth-4;}
+  function atStart(){return track.scrollLeft<=4;}
+  function goNext(){atEnd()?track.scrollTo({left:0,behavior:'smooth'}):track.scrollBy({left:step(),behavior:'smooth'});}
+  function goPrev(){atStart()?track.scrollTo({left:track.scrollWidth,behavior:'smooth'}):track.scrollBy({left:-step(),behavior:'smooth'});}
+  var timer=null;
+  function startA(){if(reduce)return;stopA();timer=setInterval(goNext,5000);}
+  function stopA(){if(timer){clearInterval(timer);timer=null;}}
+  next&&next.addEventListener('click',function(){goNext();startA();});
+  prev&&prev.addEventListener('click',function(){goPrev();startA();});
+  root.addEventListener('mouseenter',stopA);
+  root.addEventListener('mouseleave',startA);
+  var st; track.addEventListener('scroll',function(){clearTimeout(st);st=setTimeout(startA,700);},{passive:true});
+  startA();
+});
+</script>

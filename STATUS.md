@@ -1,5 +1,31 @@
 # Discord-Rozpierdalator-v2 - Status
 
+## 2026-08-28
+
+- [x] `!lp` - wybór szablonu na starcie (select menu: **Nowy** / **Stary**);
+  można pominąć inline: `!lp szablon: nowy`.
+  - **Stary szablon**: przepływ bez zmian (strona-wzorzec WP `WP_LP_TEMPLATE_PAGE_ID`
+    + tokeny `{{...}}` + `!lp materialy:` z fileuploadera).
+  - **Nowy szablon** (`src/templates/lp-new-v1.html`, oparty na LP Zalootka GeneO):
+    cała strona = jeden plik HTML wstawiany w **jeden blok `wp:html`**. Kolejna strona
+    = ten sam plik z podmienioną treścią / mediami / formularzem.
+    - Bot pyta osobno o media per sekcja: **HERO (1 link)**, **przed/po (wiele)**,
+      **opinie (wiele, kolejność = kolejność cytatów)** oraz o **shortcode CF7**
+      (cały `[contact-form-7 id=... title=...]` lub sama nazwa).
+    - Linki fileuploadera `/view/` są pobierane i wgrywane do WP Media Library;
+      inne URL-e (np. `/wp-content/...`) używane wprost.
+    - Copy: `src/utils/lpNewGenerator.js` (osobny tool-schema od starego, ten sam
+      wzorzec tool-use + zod + 1 runda naprawy; wytyczne z `GOOGLE_LP_TEMPLATE_DOC_ID`
+      jako cache_control). Sekcje: hero -> pasek zaufania -> "To dla Ciebie" ->
+      efekty -> oferta+formularz -> opinie -> dlaczego my -> jak działa ->
+      metamorfozy -> mid CTA -> FAQ (obiekcje) -> final+formularz.
+    - Render: `src/utils/lpNewTemplate.js` (`{{TOKEN}}`, `{{MEDIA:hero_image}}`,
+      `{{FORM_SHORTCODE}}`, regiony powtarzalne `BEGIN:/END:`). Braki lądują w
+      raporcie "⚠️ do uzupełnienia" tak jak w starym przepływie.
+    - **Formularz = szkielet**: w CF7 goły formularz bez stylów; całą stylizację
+      (`.zl-form-box .wpcf7-form ...`) niesie `<style>` w szablonie.
+  - Bez nowych ENV. Nowy szablon nie wymaga `WP_LP_TEMPLATE_PAGE_ID`.
+
 ## 2026-07-04
 
 - [x] Nowa komenda `!skrypt` - generator skryptów reklamowych AI:

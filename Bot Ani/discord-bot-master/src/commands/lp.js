@@ -14,6 +14,13 @@ import {
 import { matchMediaToSlots, MediaMatchError, DEFAULT_MEDIA_SLOTS } from "../utils/mediaMatcher.js";
 import { buildPageContent } from "../utils/lpContentBuilder.js";
 import { wpGetPageRawContent, wpUploadMedia, wpCreatePage } from "../utils/wordpressClient.js";
+import { generateNewLpCopy, NewLPGenerationError } from "../utils/lpNewGenerator.js";
+import {
+  getNewLpTemplate,
+  renderNewTemplate,
+  mapNewCopyToTemplate,
+  wrapWpHtmlBlock,
+} from "../utils/lpNewTemplate.js";
 
 const SHEET_URL = `https://docs.google.com/spreadsheets/d/${GOOGLE_LP_SHEET_ID}/edit`;
 const TEXT_PROMPT_TIMEOUT_MS = 90000;
@@ -86,20 +93,22 @@ function matchSlotByFilename(filename) {
  * next recognized key or the end of the message.
  */
 function parseInlineArgs(content) {
-  const result = { zabieg: null, brief: null, materialy: null, uwagi: null };
+  const result = { zabieg: null, brief: null, materialy: null, uwagi: null, szablon: null };
   if (!content) return result;
 
-  const buffers = { zabieg: [], brief: [], materialy: [], uwagi: [] };
+  const buffers = { zabieg: [], brief: [], materialy: [], uwagi: [], szablon: [] };
   let currentKey = null;
 
   for (const rawLine of content.split("\n")) {
-    const match = rawLine.match(/^\s*(zabiegi?|briefy?|materia?ly|uwag[ai]|notatki)\s*:\s*(.*)$/i);
+    const match = rawLine.match(/^\s*(zabiegi?|briefy?|materia?ly|uwag[ai]|notatki|szablon)\s*:\s*(.*)$/i);
     if (match) {
       const label = match[1].toLowerCase();
       currentKey = label.startsWith("brief")
         ? "brief"
         : label.startsWith("zabieg")
         ? "zabieg"
+        : label.startsWith("szablon")
+        ? "szablon"
         : label.startsWith("uwag") || label.startsWith("notatk")
         ? "uwagi"
         : "materialy";
@@ -113,6 +122,7 @@ function parseInlineArgs(content) {
   result.brief = buffers.brief.length ? buffers.brief.join(", ") : null;
   result.materialy = buffers.materialy.length ? buffers.materialy.join("\n") : null;
   result.uwagi = buffers.uwagi.length ? buffers.uwagi.join("\n") : null;
+  result.szablon = buffers.szablon.length ? buffers.szablon.join(" ").trim().toLowerCase() : null;
   return result;
 }
 
@@ -191,6 +201,262 @@ async function askZabieg(message) {
   });
 }
 
+// ============================================================================
+//  NOWY SZABLON (lp-new-v1): cała strona w jednym bloku wp:html, media +
+//  formularz podawane wprost w komendzie. Stary przepływ zostaje nietknięty.
+// ============================================================================
+
+function normalizeTemplateKind(raw) {
+  const v = (raw || "").trim().toLowerCase();
+  if (!v) return null;
+  if (/^(nowy|new|v2|n-?v1|lp-new)/.test(v)) return "nowy";
+  if (/^(stary|old|wzorzec|kadence|v1)/.test(v)) return "stary";
+  return null;
+}
+
+async function askTemplateKind(message) {
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId(`lp_tpl_${Date.now()}`)
+    .setPlaceholder("Który szablon LP?")
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(
+      { label: "Nowy szablon", value: "nowy", description: "Jeden blok HTML (lp-new-v1). Media i formularz podajesz w komendzie." },
+      { label: "Stary szablon", value: "stary", description: "Strona-wzorzec WP z tokenami - jak dotychczas." }
+    );
+
+  const row = new ActionRowBuilder().addComponents(selectMenu);
+  const selectMessage = await message.channel.send({ content: "📐 Wybierz szablon landing page:", components: [row] });
+  const filter = (i) => i.customId === selectMenu.data.custom_id && i.user.id === message.author.id;
+
+  try {
+    const interaction = await selectMessage.awaitMessageComponent({ filter, time: COMPONENT_TIMEOUT_MS });
+    await interaction.update({ content: `✅ Szablon: ${interaction.values[0]}`, components: [] });
+    return interaction.values[0];
+  } catch {
+    await selectMessage.edit({ content: "⌛ Czas minął, nie wybrano szablonu.", components: [] }).catch(() => {});
+    return null;
+  }
+}
+
+function splitLinks(raw) {
+  if (!raw || /^\s*brak\s*$/i.test(raw)) return [];
+  return raw
+    .split(/[\n,]+/)
+    .map((s) => s.trim())
+    .filter((s) => /^https?:\/\//i.test(s));
+}
+
+// Operator może wkleić cały shortcode CF7 (zalecane) albo samą nazwę formularza.
+function normalizeFormShortcode(raw) {
+  const t = (raw || "").trim();
+  if (t.startsWith("[")) {
+    const titleMatch = t.match(/title=["']([^"']+)["']/i);
+    return { shortcode: t, name: titleMatch ? titleMatch[1] : "formularz CF7" };
+  }
+  return { shortcode: `[contact-form-7 title="${t}"]`, name: t };
+}
+
+// Fileuploader (/view/) -> pobierz bajty i wgraj do WP Media Library.
+// Każdy inny URL (np. już zhostowany /wp-content/...) używamy wprost.
+async function resolveMediaUrl(url, seoBase) {
+  const parsed = parseFileuploaderLink(url);
+  if (parsed.type === "view") {
+    const { buffer, contentType } = await downloadFileuploaderBuffer(url);
+    const ext = extensionForMime(contentType);
+    const uploaded = await wpUploadMedia(buffer, `${seoBase}.${ext}`, contentType, {
+      altText: seoBase.replace(/-/g, " "),
+      title: seoBase.replace(/-/g, " "),
+    });
+    return uploaded.sourceUrl;
+  }
+  return url;
+}
+
+async function runNewLpFlow(message, { inline }) {
+  const zabieg = inline.zabieg || (await askZabieg(message));
+  if (!zabieg) return;
+
+  const briefLink = inline.brief || (await askText(message, "Podaj link do briefu (Google Doc):"));
+  if (!briefLink) return;
+  const briefDocId = extractGoogleDocId(briefLink);
+  if (!briefDocId) {
+    await message.channel.send({ embeds: [errorEmbed(`Nieprawidłowy link do briefu: ${briefLink}`)] });
+    return;
+  }
+
+  const heroRaw = await askText(message, "🖼️ Zdjęcie HERO - podaj **1 link** (fileuploader `/view/...` albo bezpośredni URL):");
+  if (heroRaw === null) return;
+
+  const baRaw = await askText(
+    message,
+    "🖼️ Zdjęcia PRZED/PO - podaj linki, **po jednym w linii** (te same trafią do obu karuzel). Jeśli brak: `brak`."
+  );
+  if (baRaw === null) return;
+
+  const opRaw = await askText(
+    message,
+    "🖼️ Zdjęcia OPINII (screeny) - podaj linki, **po jednym w linii**. Kolejność = kolejność cytatów. Jeśli brak: `brak`."
+  );
+  if (opRaw === null) return;
+
+  const formRaw = await askText(
+    message,
+    'Formularz CF7 - wklej **cały shortcode**, np. `[contact-form-7 id="f606427" title="ZT Geneo"]` ' +
+      "(albo samą nazwę, jeśli Twój CF7 rozwiązuje formularz po tytule). Formularz ma być gołym szkieletem - stylizuje go strona."
+  );
+  if (!formRaw) return;
+
+  const dodatkoweUwagi = inline.uwagi || null;
+
+  const heroUrls = splitLinks(heroRaw);
+  const baUrls = splitLinks(baRaw);
+  const opUrls = splitLinks(opRaw);
+  const { shortcode: formShortcode, name: formName } = normalizeFormShortcode(formRaw);
+
+  await message.channel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setColor("#FFA500")
+        .setTitle("📝 Podsumowanie (nowy szablon)")
+        .addFields(
+          { name: "Zabieg", value: zabieg },
+          { name: "Brief", value: briefLink },
+          { name: "Media", value: `HERO: ${heroUrls.length} · przed/po: ${baUrls.length} · opinie: ${opUrls.length}` },
+          { name: "Formularz", value: truncate(formShortcode, 500) }
+        ),
+    ],
+  });
+
+  const processingMsg = await message.channel.send({
+    embeds: [infoEmbed("⏳ Nowy szablon: pobieram brief i wytyczne...")],
+  });
+
+  let briefText, template;
+  try {
+    [briefText, template] = await Promise.all([fetchDocPlainText(briefDocId), getLPTemplate()]);
+  } catch (err) {
+    console.error("Error fetching new-LP starting data:", err);
+    return processingMsg.edit({ embeds: [errorEmbed(`Nie udało się pobrać danych startowych: ${err.message}`)] });
+  }
+
+  await processingMsg.edit({ embeds: [infoEmbed("⏳ Generuję copy LP (nowy szablon)...")] });
+  let copy;
+  try {
+    copy = await generateNewLpCopy({
+      templateRulesText: template.rulesText,
+      briefText,
+      formName,
+      beforeAfterCount: baUrls.length,
+      opinieCount: opUrls.length,
+      additionalNotes: dodatkoweUwagi,
+    });
+  } catch (err) {
+    if (err instanceof NewLPGenerationError) {
+      return processingMsg.edit({ embeds: [errorEmbed(`${err.message}\n\nSzczegóły: ${err.details}`)] });
+    }
+    throw err;
+  }
+
+  await processingMsg.edit({ embeds: [infoEmbed("⏳ Przetwarzam multimedia...")] });
+  const businessSlug = localSlug(copy.business?.name || zabieg || "itm") || "itm";
+  const mediaFailures = [];
+
+  let heroImageUrl = "";
+  if (heroUrls[0]) {
+    try {
+      heroImageUrl = await resolveMediaUrl(heroUrls[0], `${businessSlug}-hero`);
+    } catch (err) {
+      console.error("new-LP hero media:", err);
+      mediaFailures.push("HERO");
+    }
+  }
+
+  const resolveMany = async (urls, prefix) => {
+    const out = [];
+    for (let i = 0; i < urls.length; i++) {
+      try {
+        out.push(await resolveMediaUrl(urls[i], `${businessSlug}-${prefix}-${i + 1}`));
+      } catch (err) {
+        console.error(`new-LP ${prefix} #${i + 1} media:`, err);
+        mediaFailures.push(`${prefix} #${i + 1}`);
+      }
+    }
+    return out;
+  };
+  const baResolved = await resolveMany(baUrls, "przed-po");
+  const opResolved = await resolveMany(opUrls, "opinia");
+
+  await processingMsg.edit({ embeds: [infoEmbed("⏳ Składam stronę...")] });
+  const templateHtml = await getNewLpTemplate();
+  const { tokens, repeats } = mapNewCopyToTemplate(copy, opResolved);
+  repeats.beforeAfter = baResolved.map((u) => ({ BA_URL: u }));
+  const { content: pageBody, remainingTokens, emptyRegions } = renderNewTemplate(templateHtml, {
+    tokens,
+    repeats,
+    heroImageUrl,
+    formShortcode,
+  });
+  const pageContent = wrapWpHtmlBlock(pageBody);
+
+  await processingMsg.edit({ embeds: [infoEmbed("⏳ Tworzę szkic strony w WordPress...")] });
+  let page;
+  try {
+    page = await wpCreatePage({
+      title: copy.seo?.title || `${zabieg} - ${copy.business?.name || ""}`.trim(),
+      content: pageContent,
+      status: "draft",
+      meta: copy.seo?.metaDescription ? { description: copy.seo.metaDescription } : undefined,
+    });
+  } catch (err) {
+    console.error("Error creating new-LP WP page:", err);
+    return processingMsg.edit({
+      embeds: [errorEmbed(`Copy i media gotowe, ale nie udało się utworzyć strony WP: ${err.message}`)],
+    });
+  }
+
+  try {
+    await upsertLPRow(GOOGLE_LP_SHEET_ID, {
+      klient: copy.business?.name || "",
+      zabieg,
+      briefLink,
+      materialy: [heroRaw, baRaw, opRaw].filter((x) => x && !/^\s*brak\s*$/i.test(x)).join("\n"),
+      strona: page.editLink,
+      czyj: message.member?.displayName || message.author.username,
+    });
+  } catch (err) {
+    console.error("Error updating Baza LP row (new template):", err);
+    await message.channel.send({
+      embeds: [errorEmbed(`Strona utworzona, ale nie udało się zaktualizować arkusza Baza LP: ${err.message}`)],
+    });
+  }
+
+  const placeholderLines = [
+    ...remainingTokens.map((t) => `Pole bez danych: ${t}`),
+    ...emptyRegions.map((r) => `Pusta sekcja (0 elementów): ${r}`),
+    ...mediaFailures.map((m) => `Nie udało się wczytać medium: ${m}`),
+  ];
+
+  const implementedLines = [];
+  if (copy.business?.name) implementedLines.push(`Firma: ${copy.business.name}`);
+  implementedLines.push("Szablon: nowy (lp-new-v1), 1 blok wp:html");
+  implementedLines.push(`Formularz: ${formShortcode}`);
+  implementedLines.push(
+    `Media: HERO ${heroImageUrl ? "1" : "0"}, przed/po ${baResolved.length}, opinie ${opResolved.length}`
+  );
+
+  const finalEmbed = new EmbedBuilder()
+    .setColor(placeholderLines.length ? "#FFA500" : "#00FF00")
+    .setTitle(placeholderLines.length ? "🎊 LP (nowy szablon) wdrożona - są placeholdery" : "🎊 LP (nowy szablon) wdrożona")
+    .addFields(
+      { name: "✅ Wdrożono", value: truncate(implementedLines.join("\n") || "—", 1000) },
+      { name: "⚠️ Do uzupełnienia", value: truncate(placeholderLines.join("\n") || "Brak - wszystko wypełnione.", 1000) },
+      { name: "🔗 Linki", value: `[Szkic strony](${page.editLink})\n📊 [Arkusz Baza LP](${SHEET_URL})` }
+    );
+
+  await processingMsg.edit({ embeds: [finalEmbed] });
+}
+
 export async function processLpCommand(message) {
   try {
     const content = message.content.slice("!lp".length).trim();
@@ -206,13 +472,25 @@ export async function processLpCommand(message) {
       }
     }
 
+    const inline = parseInlineArgs(content);
+
+    let templateKind = normalizeTemplateKind(inline.szablon);
+    if (!templateKind) {
+      templateKind = await askTemplateKind(message);
+      if (!templateKind) return;
+    }
+
+    if (templateKind === "nowy") {
+      await runNewLpFlow(message, { inline });
+      return;
+    }
+
+    // ===================== STARY SZABLON (przepływ bez zmian) =====================
     if (!WP_LP_TEMPLATE_PAGE_ID) {
       return message.channel.send({
         embeds: [errorEmbed("Brak konfiguracji WP_LP_TEMPLATE_PAGE_ID - ustaw ją w .env/Railway (WP page ID strony-wzorca).")],
       });
     }
-
-    const inline = parseInlineArgs(content);
 
     let zabieg = inline.zabieg;
     if (!zabieg) {

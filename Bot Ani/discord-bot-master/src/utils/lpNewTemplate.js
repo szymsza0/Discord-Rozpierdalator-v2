@@ -1,0 +1,206 @@
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+
+/**
+ * Renderer dla szablonu "nowy" (src/templates/lp-new-v1.html).
+ *
+ * W przeciwieństwie do starego szablonu (strona-wzorzec w WP z tokenami
+ * {{TOKEN}}, patrz lpContentBuilder.js), nowy szablon:
+ *  - jest PLIKIEM w repo (wersjonowany), nie stroną WP,
+ *  - wchodzi na stronę jako JEDEN blok wp:html,
+ *  - ma sekcje o zmiennej liczbie elementów (przed/po, opinie, FAQ, ...),
+ *    więc oprócz {{TOKEN}} obsługuje regiony powtarzalne:
+ *      <!--BEGIN:nazwa--> ...wiersz z {{KLUCZ}}... <!--END:nazwa-->
+ *
+ * Formularz jest wstawiany jako goły shortcode CF7 ({{FORM_SHORTCODE}}) -
+ * cała jego stylizacja pochodzi z <style> w szablonie (reguły
+ * `.zl-form-box .wpcf7-form ...`), zgodnie z założeniem "formularz = szkielet".
+ */
+
+const TEMPLATE_PATH = fileURLToPath(new URL("../templates/lp-new-v1.html", import.meta.url));
+
+let cachedTemplate = null;
+
+export async function getNewLpTemplate({ forceRefresh = false } = {}) {
+  if (cachedTemplate && !forceRefresh) return cachedTemplate;
+  const raw = await readFile(TEMPLATE_PATH, "utf8");
+  // Zdejmij wiodący blok-komentarz z dokumentacją szablonu (wszystko przed <style>):
+  // nie ma po co trafiać na stronę i psułby raport "do uzupełnienia".
+  cachedTemplate = raw.replace(/^﻿?[\s\S]*?(<style)/, "$1");
+  return cachedTemplate;
+}
+
+/** Zawija gotowy HTML w jeden blok Gutenberga "Custom HTML". */
+export function wrapWpHtmlBlock(html) {
+  return `<!-- wp:html -->\n${html}\n<!-- /wp:html -->`;
+}
+
+// Wszystkie regiony powtarzalne obecne w lp-new-v1.html. "beforeAfter"
+// występuje 2x (dwie karuzele) - regex jest globalny, więc oba wystąpienia
+// dostają ten sam zestaw wierszy.
+const REGION_NAMES = [
+  "trust",
+  "fit",
+  "beforeAfter",
+  "opinie",
+  "offerIncludes",
+  "why",
+  "howParas",
+  "howSteps",
+  "faq",
+  "contact",
+];
+
+function fillRow(rowTemplate, item) {
+  let out = rowTemplate;
+  for (const [key, value] of Object.entries(item || {})) {
+    out = out.replaceAll(`{{${key}}}`, value == null ? "" : String(value));
+  }
+  return out;
+}
+
+function expandRegion(content, name, rows) {
+  const re = new RegExp(`<!--BEGIN:${name}-->([\\s\\S]*?)<!--END:${name}-->`, "g");
+  return content.replace(re, (_match, inner) => (rows || []).map((item) => fillRow(inner, item)).join(""));
+}
+
+/**
+ * @param {string} templateHtml  surowy szablon (getNewLpTemplate())
+ * @param {object} args
+ * @param {Object<string,string>} args.tokens         skalarne {{TOKEN}} -> wartość
+ * @param {Object<string,Array<object>>} args.repeats  nazwa regionu -> lista {KLUCZ: wartość}
+ * @param {string} args.heroImageUrl                   URL do {{MEDIA:hero_image}}
+ * @param {string} args.formShortcode                  shortcode CF7 do {{FORM_SHORTCODE}}
+ * @returns {{ content:string, remainingTokens:string[], emptyRegions:string[] }}
+ */
+export function renderNewTemplate(templateHtml, { tokens = {}, repeats = {}, heroImageUrl = "", formShortcode = "" }) {
+  let content = templateHtml;
+
+  // 1) regiony powtarzalne
+  const emptyRegions = [];
+  for (const name of REGION_NAMES) {
+    const rows = repeats[name] || [];
+    if (rows.length === 0 && new RegExp(`<!--BEGIN:${name}-->`).test(content)) emptyRegions.push(name);
+    content = expandRegion(content, name, rows);
+  }
+  // usuń ewentualne nieznane regiony, żeby komentarze BEGIN/END nie zostały w treści
+  content = content.replace(/<!--BEGIN:[a-zA-Z0-9_]+-->[\s\S]*?<!--END:[a-zA-Z0-9_]+-->/g, "");
+
+  // 2) media HERO + shortcode formularza
+  content = content.replaceAll("{{MEDIA:hero_image}}", heroImageUrl || "");
+  content = content.replaceAll("{{FORM_SHORTCODE}}", formShortcode || "");
+
+  // 3) skalarne tokeny (null / "" -> token zostaje i trafia do raportu)
+  for (const [token, value] of Object.entries(tokens)) {
+    if (value === null || value === undefined || value === "") continue;
+    content = content.replaceAll(`{{${token}}}`, String(value));
+  }
+
+  const remainingTokens = [
+    ...new Set([...content.matchAll(/\{\{[^}]+\}\}/g)].map((m) => m[0])),
+  ];
+
+  return { content, remainingTokens, emptyRegions };
+}
+
+/**
+ * Mapuje obiekt copy z generateNewLpCopy() na { tokens, repeats } dla
+ * renderNewTemplate(). Trzymane osobno od komendy, żeby kształt szablonu
+ * i kształt copy były w jednym miejscu.
+ *
+ * @param {object} copy        wynik generateNewLpCopy()
+ * @param {string[]} opinieImageUrls  URL-e opinii (parowane z copy.opinie.items po indeksie)
+ */
+export function mapNewCopyToTemplate(copy, opinieImageUrls = []) {
+  const c = copy || {};
+  const s = (v) => (v == null ? "" : String(v));
+
+  const tokens = {
+    NAV_LOGO: s(c.nav?.logo),
+    NAV_LOGO_SUB: s(c.nav?.logo_sub),
+    NAV_CTA: s(c.nav?.cta_label),
+
+    HERO_BADGE: s(c.hero?.badge),
+    HERO_HEADLINE: s(c.hero?.headline),
+    HERO_HEADLINE_EM: s(c.hero?.headline_em),
+    HERO_LEAD: s(c.hero?.lead),
+    HERO_NOTE: s(c.hero?.note),
+    HERO_CTA: s(c.hero?.cta_label),
+
+    FIT_TITLE: s(c.fit?.title),
+    FIT_SUBTITLE: s(c.fit?.subtitle),
+    FIT_CTA: s(c.fit?.cta_label),
+
+    EFEKTY_TITLE: s(c.efekty?.title),
+    EFEKTY_SUB: s(c.efekty?.subtitle),
+    EFEKTY_CTA: s(c.efekty?.cta_label),
+
+    OPINIE_TITLE: s(c.opinie?.title),
+    OPINIE_SUB: s(c.opinie?.subtitle),
+    OPINIE_CTA: s(c.opinie?.cta_label),
+
+    OFFER_TITLE: s(c.offer?.title),
+    OFFER_SUB: s(c.offer?.subtitle),
+    OFFER_EYEBROW: s(c.offer?.eyebrow),
+    OFFER_PRODUCT_TITLE: s(c.offer?.product_title),
+    OFFER_BONUS_LINE: s(c.offer?.bonus_line),
+    OFFER_PRICE_REGULAR: s(c.offer?.price_regular),
+    OFFER_PRICE_PROMO: s(c.offer?.price_promo),
+    OFFER_PRICE_PROMO_LABEL: s(c.offer?.price_promo_label) || "Cena promocyjna",
+    OFFER_SAVINGS_LINE: s(c.offer?.savings_line),
+    OFFER_COUNTDOWN_MINUTES: s(c.offer?.countdown_minutes) || "15",
+    OFFER_FORM_TITLE: s(c.offer?.form_title) || "Zostaw kontakt - oddzwonimy",
+    OFFER_FORM_SUB: s(c.offer?.form_sub),
+
+    WHY_TITLE: s(c.why_us?.title),
+    WHY_SUB: s(c.why_us?.subtitle),
+    WHY_CTA: s(c.why_us?.cta_label),
+
+    HOW_TITLE: s(c.how?.title),
+    HOW_SUB: s(c.how?.subtitle),
+    HOW_LEAD_TITLE: s(c.how?.lead_title),
+    HOW_CTA: s(c.how?.cta_label),
+
+    META_TITLE: s(c.metamorfozy?.title) || "Zobacz metamorfozy krok po kroku",
+    META_SUB: s(c.metamorfozy?.subtitle) || "Kolejne efekty naszych klientek - przesuń, aby zobaczyć więcej.",
+
+    MIDCTA_TITLE: s(c.midcta?.title),
+    MIDCTA_BODY: s(c.midcta?.body),
+    MIDCTA_CTA: s(c.midcta?.cta_label),
+
+    FAQ_TITLE: s(c.faq?.title) || "Pytania i odpowiedzi",
+    FAQ_SUB: s(c.faq?.subtitle),
+    FAQ_CTA: s(c.faq?.cta_label),
+
+    FINAL_EYEBROW: s(c.final?.eyebrow),
+    FINAL_TITLE: s(c.final?.title),
+    FINAL_SUB: s(c.final?.sub),
+    FINAL_INFO_EYEBROW: s(c.final?.info_eyebrow),
+    FINAL_INFO_TITLE: s(c.final?.info_title),
+    FINAL_PRICE_LINE: s(c.final?.price_line),
+    FINAL_FORM_TITLE: s(c.final?.form_title) || "Zostaw kontakt - oddzwonimy",
+    FINAL_FORM_SUB: s(c.final?.form_sub),
+
+    FOOTER_BRAND: s(c.footer?.brand) || s(c.business?.name),
+    FOOTER_LINE: s(c.footer?.line),
+    FOOTER_COPYRIGHT: s(c.footer?.copyright),
+  };
+
+  const repeats = {
+    trust: (c.trust || []).map((t) => ({ T_STRONG: s(t.strong), T_LABEL: s(t.label) })),
+    fit: (c.fit?.items || []).map((x) => ({ FIT_ITEM: s(x) })),
+    opinie: (c.opinie?.items || []).map((it, i) => ({
+      OP_QUOTE: s(it.quote),
+      OP_NAME: s(it.name),
+      OP_IMAGE: s(opinieImageUrls[i] || ""),
+    })),
+    offerIncludes: (c.offer?.includes || []).map((x) => ({ OFFER_INCLUDE: s(x) })),
+    why: (c.why_us?.cards || []).map((card) => ({ WHY_CARD_TITLE: s(card.title), WHY_CARD_BODY: s(card.body) })),
+    howParas: (c.how?.lead_paras || []).map((p) => ({ HOW_PARA: s(p) })),
+    howSteps: (c.how?.steps || []).map((st, i) => ({ STEP_N: String(i + 1), STEP_TITLE: s(st.title), STEP_BODY: s(st.body) })),
+    faq: (c.faq?.items || []).map((f) => ({ FAQ_Q: s(f.q), FAQ_A: s(f.a) })),
+    contact: (c.final?.contact_lines || []).map((l) => ({ CONTACT_LINE: s(l) })),
+  };
+
+  return { tokens, repeats };
+}
