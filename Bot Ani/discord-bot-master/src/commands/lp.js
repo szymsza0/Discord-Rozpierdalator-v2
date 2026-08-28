@@ -3,7 +3,7 @@ import { GOOGLE_LP_SHEET_ID, WP_LP_TEMPLATE_PAGE_ID } from "../config.js";
 import { listZabiegiLP, findReferenceLPForZabieg, upsertLPRow } from "../utils/lpSheet.js";
 import { getLPTemplate } from "../utils/lpTemplate.js";
 import { fetchDocPlainText } from "../utils/googleDocs.js";
-import { generateLPCopy, LPGenerationError } from "../utils/lpGenerator.js";
+import { generateLPCopy, LPGenerationError, ASSUMPTION_MARKER } from "../utils/lpGenerator.js";
 import {
   parseMaterialyInput,
   downloadFileuploaderBuffer,
@@ -23,6 +23,7 @@ import {
 } from "../utils/lpNewTemplate.js";
 import { buildWebhookSnippetCode, slugify } from "./webhook.js";
 import { optimizeToWebp, extForMime } from "../utils/imageOptimize.js";
+import { generatePalette } from "../utils/lpPalette.js";
 
 const SHEET_URL = `https://docs.google.com/spreadsheets/d/${GOOGLE_LP_SHEET_ID}/edit`;
 const TEXT_PROMPT_TIMEOUT_MS = 90000;
@@ -58,6 +59,25 @@ function errDetail(error) {
   const subs = Array.isArray(error?.errors) ? error.errors.map((e) => e?.message ?? String(e)) : [];
   const base = error?.message || String(error);
   return subs.length ? `${base} — ${subs.join(" | ")}` : base;
+}
+
+// Zdejmuje prefiks "⚠️ ZAŁOŻENIE: " z KAŻDEGO stringa w obiekcie copy (strona
+// ma wyglądać czysto), a ścieżki takich pól dopisuje do `out` -> raport.
+function stripAssumptionMarkers(node, out, path = "") {
+  if (typeof node === "string") {
+    if (node.startsWith(ASSUMPTION_MARKER)) {
+      out.push(path || "(pole)");
+      return node.slice(ASSUMPTION_MARKER.length).trim();
+    }
+    return node;
+  }
+  if (Array.isArray(node)) return node.map((v, i) => stripAssumptionMarkers(v, out, `${path}[${i + 1}]`));
+  if (node && typeof node === "object") {
+    const o = {};
+    for (const [k, v] of Object.entries(node)) o[k] = stripAssumptionMarkers(v, out, path ? `${path}.${k}` : k);
+    return o;
+  }
+  return node;
 }
 
 function localSlug(text) {
@@ -142,7 +162,7 @@ function parseInlineArgs(content) {
   return result;
 }
 
-async function askText(message, promptText) {
+async function askText(message, promptText, { optional = false } = {}) {
   await message.channel.send({ embeds: [infoEmbed(promptText)] });
   const filter = (m) => m.author.id === message.author.id;
   try {
@@ -154,7 +174,12 @@ async function askText(message, promptText) {
     });
     return collected.first().content.trim();
   } catch {
-    await message.channel.send({ embeds: [errorEmbed("Czas minął. Zacznij od nowa: `!lp`.")] });
+    // optional = krok dodatkowy / po utworzeniu strony: nie strasz "zacznij od nowa"
+    if (!optional) {
+      await message.channel.send({ embeds: [errorEmbed("Czas minął. Zacznij od nowa: `!lp`.")] });
+    } else {
+      await message.channel.send({ embeds: [infoEmbed("⏭️ Brak odpowiedzi - pomijam ten krok.")] });
+    }
     return null;
   }
 }
@@ -266,10 +291,10 @@ async function askTemplateKind(message) {
 
 function splitLinks(raw) {
   if (!raw || /^\s*brak\s*$/i.test(raw)) return [];
-  return raw
-    .split(/[\n,]+/)
-    .map((s) => s.trim())
-    .filter((s) => /^https?:\/\//i.test(s));
+  // wyciagnij URL-e z DOWOLNEGO miejsca w linii (Discord potrafi opakowac w <>,
+  // dokleic tekst, itd.) - wczesniejszy /^https/ gubil takie linki cicho
+  const urls = String(raw).match(/https?:\/\/[^\s<>"'`)\]]+/gi) || [];
+  return urls.map((u) => u.replace(/[.,;]+$/, ""));
 }
 
 // Operator może wkleić cały shortcode CF7 (zalecane) albo samą nazwę formularza.
@@ -291,32 +316,36 @@ async function resolveMediaUrl(url, seoBase) {
   if (base && url.startsWith(base) && /\.webp(\?|#|$)/i.test(url)) return url;
 
   const parsed = parseFileuploaderLink(url);
-  let buffer, contentType;
-  if (parsed.type === "view") {
-    ({ buffer, contentType } = await downloadFileuploaderBuffer(url));
-  } else {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`${res.status} dla ${url}`);
-    contentType = res.headers.get("content-type") || "application/octet-stream";
-    buffer = Buffer.from(await res.arrayBuffer());
-  }
-
   const alt = seoBase.replace(/-/g, " ");
-  const opt = await optimizeToWebp(buffer, contentType);
   try {
-    const uploaded = await wpUploadMedia(opt.buffer, `${seoBase}.${opt.ext}`, opt.contentType, {
-      altText: alt,
-      title: alt,
-    });
-    return uploaded.sourceUrl;
+    let buffer, contentType;
+    if (parsed.type === "view") {
+      ({ buffer, contentType } = await downloadFileuploaderBuffer(url));
+    } else {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      contentType = res.headers.get("content-type") || "";
+      if (!/^image\//i.test(contentType)) throw new Error(`odpowiedź to nie obraz (${contentType || "brak content-type"})`);
+      buffer = Buffer.from(await res.arrayBuffer());
+    }
+
+    const opt = await optimizeToWebp(buffer, contentType);
+    try {
+      const up = await wpUploadMedia(opt.buffer, `${seoBase}.${opt.ext}`, opt.contentType, { altText: alt, title: alt });
+      return up.sourceUrl;
+    } catch (err) {
+      if (!opt.converted) throw err; // np. WP w ogole nie przyjmuje uploadu
+      const up = await wpUploadMedia(buffer, `${seoBase}.${extForMime(contentType)}`, contentType, { altText: alt, title: alt });
+      return up.sourceUrl;
+    }
   } catch (err) {
-    // np. WP odrzuca webp - sprobuj oryginalem
-    if (!opt.converted) throw err;
-    const uploaded = await wpUploadMedia(buffer, `${seoBase}.${extForMime(contentType)}`, contentType, {
-      altText: alt,
-      title: alt,
-    });
-    return uploaded.sourceUrl;
+    // Ostatnia deska ratunku dla zwyklego URL-a: uzyj go wprost w <img src>,
+    // niech przeglądarka klienta go pobierze. Fileuploader /view/ tak nie dziala.
+    if (parsed.type !== "view" && /^https?:\/\//i.test(url)) {
+      console.warn(`resolveMediaUrl: nie wgrano ${url} (${err.message}), używam URL wprost`);
+      return url;
+    }
+    throw err;
   }
 }
 
@@ -354,7 +383,22 @@ async function runNewLpFlow(message, { inline }) {
   );
   if (!formRaw) return;
 
-  const dodatkoweUwagi = inline.uwagi || null;
+  const themeRaw = await askText(
+    message,
+    "🎨 Motyw kolorystyczny strony (np. `ciepły beż i mauve`, `szałwia i biel`, `granat i złoto`). " +
+      "Napisz `domyślny` albo pomiń, żeby zostawić obecną paletę:",
+    { optional: true }
+  );
+  const themeText =
+    themeRaw && !/^\s*(domy[śs]ln|default|standard)/i.test(themeRaw) ? themeRaw.trim() : null;
+
+  const uwagiRaw = await askText(
+    message,
+    "📝 Uwagi do treści przed publikacją (na co nacisk, czego unikać, ton). `brak` albo pomiń:",
+    { optional: true }
+  );
+  const uwagiFromPrompt = uwagiRaw && !/^\s*brak\s*$/i.test(uwagiRaw) ? uwagiRaw.trim() : null;
+  const dodatkoweUwagi = [inline.uwagi, uwagiFromPrompt].filter(Boolean).join("\n") || null;
 
   const heroUrls = splitLinks(heroRaw);
   const baUrls = splitLinks(baRaw);
@@ -370,7 +414,9 @@ async function runNewLpFlow(message, { inline }) {
           { name: "Zabieg", value: fv(zabieg) },
           { name: "Brief", value: fv(briefLink) },
           { name: "Media", value: fv(`HERO: ${heroUrls.length} · przed/po: ${baUrls.length} · opinie: ${opUrls.length}`) },
-          { name: "Formularz", value: fv(truncate(formShortcode, 500)) }
+          { name: "Formularz", value: fv(truncate(formShortcode, 500)) },
+          { name: "Motyw", value: fv(themeText || "domyślny"), inline: true },
+          { name: "Uwagi", value: fv(dodatkoweUwagi || "brak"), inline: true }
         ),
     ],
   });
@@ -405,17 +451,30 @@ async function runNewLpFlow(message, { inline }) {
     throw err;
   }
 
+  // "⚠️ ZAŁOŻENIE: " nie ma trafiać na stronę - zdejmujemy prefiks, a listę
+  // założonych pól pokazujemy w raporcie.
+  const assumptions = [];
+  copy = stripAssumptionMarkers(copy, assumptions);
+
+  let palette = null;
+  if (themeText) {
+    await processingMsg.edit({ embeds: [infoEmbed("⏳ Dobieram paletę kolorów...")] });
+    palette = await generatePalette(themeText);
+  }
+
   await processingMsg.edit({ embeds: [infoEmbed("⏳ Przetwarzam multimedia...")] });
   const businessSlug = localSlug(copy.business?.name || zabieg || "itm") || "itm";
   const mediaFailures = [];
 
   let heroImageUrl = "";
-  if (heroUrls[0]) {
+  if (!heroUrls[0]) {
+    mediaFailures.push("HERO: nie podano prawidłowego linku");
+  } else {
     try {
       heroImageUrl = await resolveMediaUrl(heroUrls[0], `${businessSlug}-hero`);
     } catch (err) {
       console.error("new-LP hero media:", err);
-      mediaFailures.push("HERO");
+      mediaFailures.push(`HERO: ${err.message}`);
     }
   }
 
@@ -443,6 +502,7 @@ async function runNewLpFlow(message, { inline }) {
     repeats,
     heroImageUrl,
     formShortcode,
+    palette,
   });
   const pageContent = wrapWpHtmlBlock(pageBody);
 
@@ -478,23 +538,25 @@ async function runNewLpFlow(message, { inline }) {
     });
   }
 
-  // Opcjonalnie: webhook formularza -> fragment HTML w Code Snippets (stopka).
+  // Opcjonalnie (już PO utworzeniu strony): webhook -> fragment w Code Snippets.
+  // Cały krok w try - cokolwiek się tu wywali, raport i tak musi dojść.
   let webhookLine = null;
-  const webhookAns = await askText(
-    message,
-    "Wstawić webhook formularza (Make/Zapier) jako fragment w Code Snippets? Wklej **URL webhooka** albo napisz `nie`:"
-  );
-  if (webhookAns && !/^\s*nie\s*$/i.test(webhookAns) && /^https?:\/\/\S+$/i.test(webhookAns.trim())) {
-    const webhookUrl = webhookAns.trim();
-    const slugGuess = slugify(copy.seo?.title || zabieg || "");
-    const slugRaw = await askText(
+  try {
+    const webhookAns = await askText(
       message,
-      `Slug strony dla guardu webhooka (\`brak\` = działa wszędzie). Domyślnie: \`${slugGuess || "brak"}\``
+      "➕ (opcjonalnie) Wstawić webhook formularza jako fragment w Code Snippets? Wklej **URL webhooka** albo `nie`:",
+      { optional: true }
     );
-    const pageSlug =
-      slugRaw == null ? slugGuess : /^\s*brak\s*$/i.test(slugRaw) ? "" : slugRaw.trim() || slugGuess;
-    const formLabel = slugify(formName) || "cf7";
-    try {
+    const webhookUrl = webhookAns && !/^\s*nie\s*$/i.test(webhookAns) ? (webhookAns.match(/https?:\/\/\S+/i) || [])[0] : null;
+    if (webhookUrl) {
+      const slugGuess = slugify(copy.seo?.title || zabieg || "");
+      const slugRaw = await askText(
+        message,
+        `Slug strony do guardu webhooka (\`brak\` = wszędzie). Domyślnie: \`${slugGuess || "brak"}\``,
+        { optional: true }
+      );
+      const pageSlug = slugRaw == null ? slugGuess : /^\s*brak\s*$/i.test(slugRaw) ? "" : slugRaw.trim() || slugGuess;
+      const formLabel = slugify(formName) || "cf7";
       const code = await buildWebhookSnippetCode({ webhookUrl, formName: formLabel, pageSlug });
       const markerKey = slugify(pageSlug || formLabel || "global") || "global";
       const snip = await wpUpsertSnippet({
@@ -505,41 +567,54 @@ async function runNewLpFlow(message, { inline }) {
         tags: ["itm", "webhook", "cf7"],
         active: true,
       });
-      webhookLine = `Webhook: fragment #${snip.id} ${snip.created ? "utworzony" : "zaktualizowany"} (${
-        pageSlug || "wszędzie"
-      })`;
-    } catch (err) {
-      console.error("new-LP webhook snippet:", err);
-      webhookLine = `Webhook: NIE zapisano - ${err.message}`;
+      webhookLine = `Webhook: fragment #${snip.id} ${snip.created ? "utworzony" : "zaktualizowany"} (${pageSlug || "wszędzie"})`;
     }
+  } catch (err) {
+    console.error("new-LP webhook snippet:", err);
+    webhookLine = `Webhook: NIE zapisano - ${err.message}`;
   }
 
-  const placeholderLines = [
+  // -------- RAPORT KOŃCOWY --------
+  const needs = [
     ...remainingTokens.map((t) => `Pole bez danych: ${t}`),
     ...emptyRegions.map((r) => `Pusta sekcja (0 elementów): ${r}`),
-    ...mediaFailures.map((m) => `Nie udało się wczytać medium: ${m}`),
+    ...mediaFailures.map((m) => `Media - ${m}`),
   ];
-  if (webhookLine && webhookLine.startsWith("Webhook: NIE")) placeholderLines.push(webhookLine);
-
-  const implementedLines = [];
-  if (copy.business?.name) implementedLines.push(`Firma: ${copy.business.name}`);
-  implementedLines.push("Szablon: nowy (lp-new-v1), 1 blok wp:html");
-  implementedLines.push(`Formularz: ${formShortcode}`);
-  implementedLines.push(
-    `Media: HERO ${heroImageUrl ? "1" : "0"}, przed/po ${baResolved.length}, opinie ${opResolved.length}`
-  );
-  if (webhookLine && !webhookLine.startsWith("Webhook: NIE")) implementedLines.push(webhookLine);
-
-  const finalEmbed = new EmbedBuilder()
-    .setColor(placeholderLines.length ? "#FFA500" : "#00FF00")
-    .setTitle(placeholderLines.length ? "🎊 LP (nowy szablon) wdrożona - są placeholdery" : "🎊 LP (nowy szablon) wdrożona")
-    .addFields(
-      { name: "✅ Wdrożono", value: fv(truncate(implementedLines.join("\n"), 1000)) },
-      { name: "⚠️ Do uzupełnienia", value: fv(truncate(placeholderLines.join("\n") || "Brak - wszystko wypełnione.", 1000)) },
-      { name: "🔗 Linki", value: fv(`[Szkic strony](${page.editLink})\n📊 [Arkusz Baza LP](${SHEET_URL})`) }
+  if (webhookLine && webhookLine.startsWith("Webhook: NIE")) needs.push(webhookLine);
+  if (themeText && !palette) needs.push("Motyw: nie udało się wygenerować palety, została domyślna");
+  if (assumptions.length) {
+    needs.push(
+      `Założenia AI do sprawdzenia (${assumptions.length}): ${assumptions.slice(0, 15).join(", ")}${
+        assumptions.length > 15 ? " ..." : ""
+      }`
     );
+  }
 
-  await processingMsg.edit({ embeds: [finalEmbed] });
+  const done = [];
+  if (copy.business?.name) done.push(`Firma: ${copy.business.name}`);
+  done.push("Szablon: nowy (lp-new-v1), 1 blok wp:html");
+  if (palette) done.push(`Motyw: paleta z „${truncate(themeText, 50)}"`);
+  done.push(`Formularz: ${formShortcode}`);
+  done.push(`Media: HERO ${heroImageUrl ? "1" : "0"}, przed/po ${baResolved.length}, opinie ${opResolved.length}`);
+  if (webhookLine && !webhookLine.startsWith("Webhook: NIE")) done.push(webhookLine);
+
+  const pageUrl = page.link || page.editLink;
+  const finalEmbed = new EmbedBuilder()
+    .setColor(needs.length ? "#FFA500" : "#00FF00")
+    .setTitle(needs.length ? "🎊 LP gotowa - zerknij, czego nie udało się zrobić" : "🎊 LP (nowy szablon) wdrożona")
+    .addFields(
+      { name: "✅ Zrobione", value: fv(truncate(done.join("\n"), 1000)) },
+      { name: "⚠️ Czego nie udało się zrobić / do sprawdzenia", value: fv(truncate(needs.join("\n") || "Nic, wszystko poszło.", 1000)) },
+      { name: "🔗 Linki", value: fv(`[Strona (podgląd)](${pageUrl})\n[Edytuj szkic](${page.editLink})\n📊 [Arkusz Baza LP](${SHEET_URL})`) }
+    )
+    .setFooter({ text: "Czegoś brakuje albo coś poprawić? Napisz, dorzucę." });
+
+  try {
+    await processingMsg.edit({ embeds: [finalEmbed] });
+  } catch {
+    await message.channel.send({ embeds: [finalEmbed] });
+  }
+  await message.channel.send(`🔗 Strona: ${pageUrl}`);
 }
 
 export async function processLpCommand(message) {
@@ -786,6 +861,10 @@ export async function processLpCommand(message) {
       throw err;
     }
 
+    // "⚠️ ZAŁOŻENIE: " nie ma trafiać na stronę - zdejmujemy prefiks.
+    const assumptions = [];
+    copy = stripAssumptionMarkers(copy, assumptions);
+
     await processingMsg.edit({ embeds: [infoEmbed("⏳ Wgrywam materiały do WordPress Media Library...")] });
 
     const mediaBySlot = {};
@@ -897,17 +976,31 @@ export async function processLpCommand(message) {
       ...uploadFailures.map((s) => `Błąd wgrywania pliku dla slotu: ${s}`),
       ...skipped.map((s) => `Pominięty plik (nieobsługiwany format ${s.contentType}): ${s.url}`),
     ];
+    if (assumptions.length) {
+      placeholderLines.push(
+        `Założenia AI do sprawdzenia (${assumptions.length}): ${assumptions.slice(0, 15).join(", ")}${
+          assumptions.length > 15 ? " ..." : ""
+        }`
+      );
+    }
 
+    const pageUrl = page.link || page.editLink;
     const finalEmbed = new EmbedBuilder()
       .setColor(placeholderLines.length ? "#FFA500" : "#00FF00")
       .setTitle(placeholderLines.length ? "🎊 LP wdrożona (są placeholdery)" : "🎊 LP wdrożona")
       .addFields(
         { name: "✅ Wdrożono", value: truncate(implementedLines.join("\n") || "—", 1000) },
-        { name: "⚠️ Do uzupełnienia", value: truncate(placeholderLines.join("\n") || "Brak - wszystko wypełnione.", 1000) },
-        { name: "🔗 Linki", value: `[Szkic strony](${page.editLink})\n📊 [Arkusz Baza LP](${SHEET_URL})` }
-      );
+        { name: "⚠️ Czego nie udało się zrobić / do sprawdzenia", value: truncate(placeholderLines.join("\n") || "Nic, wszystko poszło.", 1000) },
+        { name: "🔗 Linki", value: `[Strona (podgląd)](${pageUrl})\n[Edytuj szkic](${page.editLink})\n📊 [Arkusz Baza LP](${SHEET_URL})` }
+      )
+      .setFooter({ text: "Czegoś brakuje albo coś poprawić? Napisz, dorzucę." });
 
-    await processingMsg.edit({ embeds: [finalEmbed] });
+    try {
+      await processingMsg.edit({ embeds: [finalEmbed] });
+    } catch {
+      await message.channel.send({ embeds: [finalEmbed] });
+    }
+    await message.channel.send(`🔗 Strona: ${pageUrl}`);
   } catch (error) {
     console.error("Error processing lp command:", error);
     try {

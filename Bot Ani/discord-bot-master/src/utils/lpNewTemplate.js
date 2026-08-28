@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { PALETTE_KEYS } from "./lpPalette.js";
 
 /**
  * Renderer dla szablonu "nowy" (src/templates/lp-new-v1.html).
@@ -53,6 +54,11 @@ const REGION_NAMES = [
 
 function fillRow(rowTemplate, item) {
   let out = rowTemplate;
+  // [[if KLUCZ]] ... [[/if]] - zostaw wnetrze tylko gdy item[KLUCZ] jest niepuste
+  out = out.replace(/\[\[if (\w+)\]\]([\s\S]*?)\[\[\/if\]\]/g, (_m, key, inner) => {
+    const v = item ? item[key] : undefined;
+    return v == null || v === "" ? "" : inner;
+  });
   for (const [key, value] of Object.entries(item || {})) {
     out = out.replaceAll(`{{${key}}}`, value == null ? "" : String(value));
   }
@@ -71,10 +77,23 @@ function expandRegion(content, name, rows) {
  * @param {Object<string,Array<object>>} args.repeats  nazwa regionu -> lista {KLUCZ: wartość}
  * @param {string} args.heroImageUrl                   URL do {{MEDIA:hero_image}}
  * @param {string} args.formShortcode                  shortcode CF7 do {{FORM_SHORTCODE}}
+ * @param {Object<string,string>|null} args.palette    {cream, ink, mauveDeep, ...} #RRGGBB (generatePalette)
  * @returns {{ content:string, remainingTokens:string[], emptyRegions:string[] }}
  */
-export function renderNewTemplate(templateHtml, { tokens = {}, repeats = {}, heroImageUrl = "", formShortcode = "" }) {
+export function renderNewTemplate(
+  templateHtml,
+  { tokens = {}, repeats = {}, heroImageUrl = "", formShortcode = "", palette = null }
+) {
   let content = templateHtml;
+
+  // 0) motyw kolorystyczny: podmien wartosci zmiennych --zl-* w :root
+  if (palette) {
+    for (const [key, cssVar] of Object.entries(PALETTE_KEYS)) {
+      const hex = palette[key];
+      if (!/^#[0-9a-fA-F]{6}$/.test(hex || "")) continue;
+      content = content.replace(new RegExp(`(${cssVar}\\s*:\\s*)#[0-9a-fA-F]{3,8}`, "g"), `$1${hex}`);
+    }
+  }
 
   // 1) regiony powtarzalne
   const emptyRegions = [];
@@ -189,11 +208,16 @@ export function mapNewCopyToTemplate(copy, opinieImageUrls = []) {
   const repeats = {
     trust: (c.trust || []).map((t) => ({ T_STRONG: s(t.strong), T_LABEL: s(t.label) })),
     fit: (c.fit?.items || []).map((x) => ({ FIT_ITEM: s(x) })),
-    opinie: (c.opinie?.items || []).map((it, i) => ({
-      OP_QUOTE: s(it.quote),
-      OP_NAME: s(it.name),
-      OP_IMAGE: s(opinieImageUrls[i] || ""),
-    })),
+    // Renderujemy tyle kart, ile jest ZDJĘĆ opinii (to realne screeny). Cytat
+    // i imię dokładamy tylko gdy AI je zwróciło (real, nie zmyślone) - inaczej
+    // karta to samo zdjęcie.
+    opinie: Array.from(
+      { length: Math.max((c.opinie?.items || []).length, opinieImageUrls.length) },
+      (_unused, i) => {
+        const it = (c.opinie?.items || [])[i] || {};
+        return { OP_QUOTE: s(it.quote), OP_NAME: s(it.name), OP_IMAGE: s(opinieImageUrls[i] || "") };
+      }
+    ),
     offerIncludes: (c.offer?.includes || []).map((x) => ({ OFFER_INCLUDE: s(x) })),
     why: (c.why_us?.cards || []).map((card) => ({ WHY_CARD_TITLE: s(card.title), WHY_CARD_BODY: s(card.body) })),
     howParas: (c.how?.lead_paras || []).map((p) => ({ HOW_PARA: s(p) })),

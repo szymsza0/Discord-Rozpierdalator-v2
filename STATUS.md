@@ -2,6 +2,29 @@
 
 ## 2026-08-28
 
+- [x] `!lp` (nowy szablon) - dopracowanie przepływu i raportu:
+  - pyta dodatkowo o **motyw kolorystyczny** (`src/utils/lpPalette.js` generuje
+    12 zmiennych `--zl-*` z opisu; `renderNewTemplate` podmienia je w `:root`;
+    `domyślny`/pominięcie = paleta bazowa) i o **uwagi** przed publikacją
+    (dołączane do `additionalNotes` generatora).
+  - **`⚠️ ZAŁOŻENIE:`** nie trafia już na stronę - prefiks zdejmowany
+    (`stripAssumptionMarkers`), a lista założonych pól idzie do raportu.
+  - **Opinie**: renderuje tyle kart, ile jest ZDJĘĆ; cytat/imię tylko gdy
+    realne (nowa składnia `[[if KLUCZ]]…[[/if]]` w regionach). Generator nie
+    zmyśla już cytatów/nazwisk do wyrównania liczby.
+  - Po utworzeniu: bot wysyła **link do strony** (podgląd + edycja) osobną
+    wiadomością; raport końcowy to teraz "✅ Zrobione / ⚠️ Czego nie udało się
+    zrobić + do sprawdzenia" + stopka "napisz, dorzucę".
+  - Kroki dodatkowe (motyw, uwagi, webhook) używają `askText(..., {optional})`
+    - timeout ich pomija zamiast ubijać cały przebieg; cały krok webhooka
+      w try, żeby raport zawsze doszedł.
+  - `splitLinks` wyłuskuje URL-e z dowolnego miejsca linii (wcześniej `/^https/`
+    gubił linki opakowane w `<>` / z tekstem - stąd brak grafiki w HERO).
+  - `resolveMediaUrl`: zwykły URL, którego nie da się przewgrać, ląduje w
+    `<img src>` wprost (zamiast twardego błędu); brak/porażka HERO jest
+    raportowana.
+  - Szablon: większa czcionka bazowa (17 -> 18.5 px) i tekstów pomocniczych.
+
 - [x] `!lp` - automatyczna konwersja zdjęć do **WebP** + limit szerokości
   (domyślnie 1800 px) przed wgraniem do WP Media Library. Cel: szybkie strony.
   - `src/utils/imageOptimize.js` (`optimizeToWebp`) - `sharp` ładowany

@@ -354,7 +354,7 @@ function buildUserPrompt({ briefText, formName, beforeAfterCount, opinieCount, a
     "--- KONTEKST MEDIÓW I FORMULARZA (dostarczone osobno przez operatora) ---\n" +
       `- Zdjęcie HERO: 1 szt.\n` +
       `- Zdjęcia przed/po: ${beforeAfterCount} szt. (te same trafiają do obu karuzel).\n` +
-      `- Zdjęcia opinii: ${opinieCount} szt. - opinie w opinie.items parujemy z nimi po kolejności, więc podaj DOKŁADNIE ${opinieCount} pozycji w opinie.items (jeśli brief ma mniej realnych cytatów, dopisz brakujące od "${ASSUMPTION_MARKER}").\n` +
+      `- Zdjęcia opinii: ${opinieCount} szt. (to są realne screeny recenzji Google). W opinie.items podaj TYLKO realne, mocne cytaty z briefu + imię, parowane po kolejności ze zdjęciami. Jeśli brief nie ma tylu cytatów - podaj mniej pozycji albo pustą tablicę. NIGDY nie wymyślaj treści opinii ani nazwisk (to realne osoby) - karta bez cytatu pokaże samo zdjęcie.\n` +
       `- Formularz: shortcode CF7 o nazwie "${formName}" wstawiamy w 2 miejscach - Ty nie generujesz pól formularza.`
   );
 
