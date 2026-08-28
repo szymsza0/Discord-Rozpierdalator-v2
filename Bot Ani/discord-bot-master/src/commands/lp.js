@@ -22,6 +22,7 @@ import {
   wrapWpHtmlBlock,
 } from "../utils/lpNewTemplate.js";
 import { buildWebhookSnippetCode, slugify } from "./webhook.js";
+import { optimizeToWebp, extForMime } from "../utils/imageOptimize.js";
 
 const SHEET_URL = `https://docs.google.com/spreadsheets/d/${GOOGLE_LP_SHEET_ID}/edit`;
 const TEXT_PROMPT_TIMEOUT_MS = 90000;
@@ -281,20 +282,42 @@ function normalizeFormShortcode(raw) {
   return { shortcode: `[contact-form-7 title="${t}"]`, name: t };
 }
 
-// Fileuploader (/view/) -> pobierz bajty i wgraj do WP Media Library.
-// Każdy inny URL (np. już zhostowany /wp-content/...) używamy wprost.
+// Pobiera medium (fileuploader /view/ albo dowolny http[s]), konwertuje do
+// WebP + ogranicza szerokosc (strona ma byc szybka) i wgrywa do WP Media
+// Library. Wyjatek: obrazek juz zhostowany na naszym WP i juz w .webp -
+// uzywamy go wprost, bez duplikatu.
 async function resolveMediaUrl(url, seoBase) {
+  const base = (WP_BASE_URL || "").replace(/\/$/, "");
+  if (base && url.startsWith(base) && /\.webp(\?|#|$)/i.test(url)) return url;
+
   const parsed = parseFileuploaderLink(url);
+  let buffer, contentType;
   if (parsed.type === "view") {
-    const { buffer, contentType } = await downloadFileuploaderBuffer(url);
-    const ext = extensionForMime(contentType);
-    const uploaded = await wpUploadMedia(buffer, `${seoBase}.${ext}`, contentType, {
-      altText: seoBase.replace(/-/g, " "),
-      title: seoBase.replace(/-/g, " "),
+    ({ buffer, contentType } = await downloadFileuploaderBuffer(url));
+  } else {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`${res.status} dla ${url}`);
+    contentType = res.headers.get("content-type") || "application/octet-stream";
+    buffer = Buffer.from(await res.arrayBuffer());
+  }
+
+  const alt = seoBase.replace(/-/g, " ");
+  const opt = await optimizeToWebp(buffer, contentType);
+  try {
+    const uploaded = await wpUploadMedia(opt.buffer, `${seoBase}.${opt.ext}`, opt.contentType, {
+      altText: alt,
+      title: alt,
+    });
+    return uploaded.sourceUrl;
+  } catch (err) {
+    // np. WP odrzuca webp - sprobuj oryginalem
+    if (!opt.converted) throw err;
+    const uploaded = await wpUploadMedia(buffer, `${seoBase}.${extForMime(contentType)}`, contentType, {
+      altText: alt,
+      title: alt,
     });
     return uploaded.sourceUrl;
   }
-  return url;
 }
 
 async function runNewLpFlow(message, { inline }) {
@@ -772,27 +795,40 @@ export async function processLpCommand(message) {
         // Folder-sourced files (keyword-matched or vision-matched) already
         // have their bytes from the folder scan above - re-downloading them
         // here would be a wasted second network round-trip for no reason.
-        const { buffer, contentType } = info.buffer
+        const src = info.buffer
           ? { buffer: info.buffer, contentType: info.contentType }
           : await downloadFileuploaderBuffer(info.url);
-        const ext = extensionForMime(contentType);
         const businessSlug = localSlug(copy.business?.name || "itm") || "itm";
+
+        // Konwersja do WebP + limit szerokosci przed wgraniem (szybkosc strony).
+        const opt = await optimizeToWebp(src.buffer, src.contentType);
 
         // "folder-keyword" is treated the same as "labeled" for local SEO
         // naming - it was a deterministic filename match, not a Claude guess,
         // so it doesn't have (or need) seoFileName/seoAltText from the model.
         const isDeterministic = info.source === "labeled" || info.source === "folder-keyword";
-        const seoFileName = isDeterministic
-          ? `${businessSlug}-${localSlug(slot)}.${ext}`
-          : info.seoFileName || `${localSlug(slot)}.${ext}`;
+        const baseName = isDeterministic
+          ? `${businessSlug}-${localSlug(slot)}`
+          : info.seoFileName
+          ? info.seoFileName.replace(/\.[a-z0-9]+$/i, "")
+          : localSlug(slot);
         const seoAltText = isDeterministic
           ? `${copy.business?.name || ""} - ${slot.replace(/_/g, " ")}`.trim()
           : info.seoAltText || slot;
 
-        const uploaded = await wpUploadMedia(buffer, seoFileName, contentType, {
-          altText: seoAltText,
-          title: seoAltText,
-        });
+        let uploaded;
+        try {
+          uploaded = await wpUploadMedia(opt.buffer, `${baseName}.${opt.ext}`, opt.contentType, {
+            altText: seoAltText,
+            title: seoAltText,
+          });
+        } catch (err) {
+          if (!opt.converted) throw err;
+          uploaded = await wpUploadMedia(src.buffer, `${baseName}.${extensionForMime(src.contentType)}`, src.contentType, {
+            altText: seoAltText,
+            title: seoAltText,
+          });
+        }
         mediaBySlot[slot] = uploaded.sourceUrl;
       } catch (err) {
         console.error(`Błąd wgrywania medium dla slotu ${slot}:`, err);

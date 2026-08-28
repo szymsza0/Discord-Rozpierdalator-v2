@@ -275,7 +275,7 @@
       <a href="#form-top" class="zl-btn">{{HERO_CTA}} &rarr;</a>
     </div>
     <div class="zl-hero__media">
-      <img src="{{MEDIA:hero_image}}" alt="{{HERO_HEADLINE}}" class="zl-img zl-ph--portrait">
+      <img src="{{MEDIA:hero_image}}" alt="{{HERO_HEADLINE}}" class="zl-img zl-ph--portrait" fetchpriority="high" decoding="async">
     </div>
   </div>
 </header>
@@ -314,7 +314,7 @@
       <button class="zl-arrow zl-arrow--prev" type="button" aria-label="Poprzednie zdjęcie">&#8249;</button>
       <div class="zl-track">
         <!--BEGIN:beforeAfter-->
-        <div class="zl-slide"><img src="{{BA_URL}}" alt="Efekt zabiegu - przed i po" loading="lazy"><b>PRZED &rarr; PO</b></div>
+        <div class="zl-slide"><img src="{{BA_URL}}" alt="Efekt zabiegu - przed i po" loading="lazy" decoding="async"><b>PRZED &rarr; PO</b></div>
         <!--END:beforeAfter-->
       </div>
       <button class="zl-arrow zl-arrow--next" type="button" aria-label="Następne zdjęcie">&#8250;</button>
@@ -367,7 +367,7 @@
         <span class="stars">&#9733;&#9733;&#9733;&#9733;&#9733;</span>
         <p class="q">&bdquo;{{OP_QUOTE}}&rdquo;</p>
         <span class="who">{{OP_NAME}}</span>
-        <img src="{{OP_IMAGE}}" alt="Opinia klientki" loading="lazy">
+        <img src="{{OP_IMAGE}}" alt="Opinia klientki" loading="lazy" decoding="async">
       </article>
       <!--END:opinie-->
     </div>
@@ -425,7 +425,7 @@
       <button class="zl-arrow zl-arrow--prev" type="button" aria-label="Poprzednie zdjęcie">&#8249;</button>
       <div class="zl-track">
         <!--BEGIN:beforeAfter-->
-        <div class="zl-slide"><img src="{{BA_URL}}" alt="Efekt zabiegu - przed i po" loading="lazy"><b>PRZED &rarr; PO</b></div>
+        <div class="zl-slide"><img src="{{BA_URL}}" alt="Efekt zabiegu - przed i po" loading="lazy" decoding="async"><b>PRZED &rarr; PO</b></div>
         <!--END:beforeAfter-->
       </div>
       <button class="zl-arrow zl-arrow--next" type="button" aria-label="Następne zdjęcie">&#8250;</button>

@@ -2,6 +2,21 @@
 
 ## 2026-08-28
 
+- [x] `!lp` - automatyczna konwersja zdjęć do **WebP** + limit szerokości
+  (domyślnie 1800 px) przed wgraniem do WP Media Library. Cel: szybkie strony.
+  - `src/utils/imageOptimize.js` (`optimizeToWebp`) - `sharp` ładowany
+    dynamicznie w try/catch: brak natywnej zależności = wgrywamy oryginał,
+    bot nie pada. SVG/GIF/animacje pomijane. EXIF orientacja wypalana.
+  - Nowa ścieżka: każdy podany link (fileuploader **i** dowolny http[s]) jest
+    pobierany, konwertowany i wgrywany; wyjątek - obrazek już na naszym WP
+    i już `.webp` idzie wprost (bez duplikatu). Fallback do oryginału gdy WP
+    odrzuci webp.
+  - Stara ścieżka: `optimizeToWebp` wpięte w pętlę wgrywania mediów
+    (nazwa pliku wymuszana na `.webp`).
+  - Szablon `lp-new-v1.html`: HERO `fetchpriority="high"`, obrazy poniżej
+    zgięcia `decoding="async"` (dalej `loading="lazy"`).
+  - Nowa zależność: `sharp` (`npm install` na deployu Railway zaciąga sam).
+
 - [x] `!lp` - wybór szablonu na starcie (select menu: **Nowy** / **Stary**);
   można pominąć inline: `!lp szablon: nowy`.
   - **Stary szablon**: przepływ bez zmian (strona-wzorzec WP `WP_LP_TEMPLATE_PAGE_ID`
