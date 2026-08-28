@@ -13,7 +13,7 @@ import {
 } from "../utils/fileuploaderMedia.js";
 import { matchMediaToSlots, MediaMatchError, DEFAULT_MEDIA_SLOTS } from "../utils/mediaMatcher.js";
 import { buildPageContent } from "../utils/lpContentBuilder.js";
-import { wpGetPageRawContent, wpUploadMedia, wpCreatePage } from "../utils/wordpressClient.js";
+import { wpGetPageRawContent, wpUploadMedia, wpCreatePage, wpUpsertSnippet } from "../utils/wordpressClient.js";
 import { generateNewLpCopy, NewLPGenerationError } from "../utils/lpNewGenerator.js";
 import {
   getNewLpTemplate,
@@ -21,6 +21,7 @@ import {
   mapNewCopyToTemplate,
   wrapWpHtmlBlock,
 } from "../utils/lpNewTemplate.js";
+import { buildWebhookSnippetCode, slugify } from "./webhook.js";
 
 const SHEET_URL = `https://docs.google.com/spreadsheets/d/${GOOGLE_LP_SHEET_ID}/edit`;
 const TEXT_PROMPT_TIMEOUT_MS = 90000;
@@ -431,11 +432,48 @@ async function runNewLpFlow(message, { inline }) {
     });
   }
 
+  // Opcjonalnie: webhook formularza -> fragment HTML w Code Snippets (stopka).
+  let webhookLine = null;
+  const webhookAns = await askText(
+    message,
+    "Wstawić webhook formularza (Make/Zapier) jako fragment w Code Snippets? Wklej **URL webhooka** albo napisz `nie`:"
+  );
+  if (webhookAns && !/^\s*nie\s*$/i.test(webhookAns) && /^https?:\/\/\S+$/i.test(webhookAns.trim())) {
+    const webhookUrl = webhookAns.trim();
+    const slugGuess = slugify(copy.seo?.title || zabieg || "");
+    const slugRaw = await askText(
+      message,
+      `Slug strony dla guardu webhooka (\`brak\` = działa wszędzie). Domyślnie: \`${slugGuess || "brak"}\``
+    );
+    const pageSlug =
+      slugRaw == null ? slugGuess : /^\s*brak\s*$/i.test(slugRaw) ? "" : slugRaw.trim() || slugGuess;
+    const formLabel = slugify(formName) || "cf7";
+    try {
+      const code = await buildWebhookSnippetCode({ webhookUrl, formName: formLabel, pageSlug });
+      const markerKey = slugify(pageSlug || formLabel || "global") || "global";
+      const snip = await wpUpsertSnippet({
+        name: `ITM webhook :: ${markerKey}`,
+        code,
+        scope: "site-footer",
+        description: `Webhook CF7 -> ${webhookUrl} (formularz: ${formLabel}${pageSlug ? `, slug: ${pageSlug}` : ""})`,
+        tags: ["itm", "webhook", "cf7"],
+        active: true,
+      });
+      webhookLine = `Webhook: fragment #${snip.id} ${snip.created ? "utworzony" : "zaktualizowany"} (${
+        pageSlug || "wszędzie"
+      })`;
+    } catch (err) {
+      console.error("new-LP webhook snippet:", err);
+      webhookLine = `Webhook: NIE zapisano - ${err.message}`;
+    }
+  }
+
   const placeholderLines = [
     ...remainingTokens.map((t) => `Pole bez danych: ${t}`),
     ...emptyRegions.map((r) => `Pusta sekcja (0 elementów): ${r}`),
     ...mediaFailures.map((m) => `Nie udało się wczytać medium: ${m}`),
   ];
+  if (webhookLine && webhookLine.startsWith("Webhook: NIE")) placeholderLines.push(webhookLine);
 
   const implementedLines = [];
   if (copy.business?.name) implementedLines.push(`Firma: ${copy.business.name}`);
@@ -444,6 +482,7 @@ async function runNewLpFlow(message, { inline }) {
   implementedLines.push(
     `Media: HERO ${heroImageUrl ? "1" : "0"}, przed/po ${baResolved.length}, opinie ${opResolved.length}`
   );
+  if (webhookLine && !webhookLine.startsWith("Webhook: NIE")) implementedLines.push(webhookLine);
 
   const finalEmbed = new EmbedBuilder()
     .setColor(placeholderLines.length ? "#FFA500" : "#00FF00")

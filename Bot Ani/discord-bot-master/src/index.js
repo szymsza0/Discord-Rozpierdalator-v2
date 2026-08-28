@@ -13,6 +13,7 @@ import { processFakturyCommand } from "./commands/faktury.js"; //dodany import
 import { processSowaCommand } from "./commands/sowa.js";
 import { processSkryptCommand } from "./commands/skrypt.js";
 import { processLpCommand } from "./commands/lp.js";
+import { processWebhookCommand } from "./commands/webhook.js";
 import { processFeedbackCommand } from "./commands/feedback.js";
 import {
   processDiscoveryCommand,
@@ -95,6 +96,10 @@ client.on("messageCreate", async (message) => {
 
   if (message.content.startsWith("!lp")) {
     await processLpCommand(message);
+  }
+
+  if (message.content.startsWith("!webhook")) {
+    await processWebhookCommand(message);
   }
 
   if (message.content.startsWith("!feedback")) {

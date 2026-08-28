@@ -119,3 +119,77 @@ export async function wpCreatePage({ title, content, status = "draft", slug, met
     editLink: `${WP_BASE_URL.replace(/\/$/, "")}/wp-admin/post.php?post=${created.id}&action=edit`,
   };
 }
+
+/* ==========================================================================
+ *  Wtyczka "Code Snippets" (pl: "Fragmenty kodu") - REST API code-snippets/v1
+ *  Uzywane przez komende !webhook do wstawiania skryptu webhooka jako
+ *  fragmentu HTML w stopce (scope: site-footer). Wymaga konta WP z
+ *  uprawnieniem manage_options (Application Password administratora).
+ * ========================================================================== */
+
+function snippetEditLink(id) {
+  return `${WP_BASE_URL.replace(/\/$/, "")}/wp-admin/admin.php?page=edit-snippet&id=${id}`;
+}
+
+/** Lista fragmentow (opcjonalnie filtr po tagu). */
+export async function wpListSnippets({ tag } = {}) {
+  const qs = tag ? `?tags=${encodeURIComponent(tag)}` : "";
+  const data = await wpFetch(`/code-snippets/v1/snippets${qs}`);
+  return Array.isArray(data) ? data : [];
+}
+
+/**
+ * Tworzy lub aktualizuje fragment Code Snippets identyfikowany po dokladnej
+ * nazwie (marker). Zwraca { id, created, editLink }.
+ *
+ * scope domyslnie "site-footer" = fragment HTML wstrzykiwany przez wp_footer
+ * na calej stronie (kod HTML w Code Snippets nie przechodzi przez KSES, wiec
+ * <script> przezywa). Dla fragmentu wpietego tylko na wybranych stronach
+ * uzyj wlasnego guardu w samym kodzie (np. sprawdzenie window.location).
+ */
+export async function wpUpsertSnippet({
+  name,
+  code,
+  scope = "site-footer",
+  description = "",
+  tags = [],
+  priority = 10,
+  active = true,
+}) {
+  if (!name || !code) throw new Error("wpUpsertSnippet: wymagane pola 'name' i 'code'.");
+
+  const all = await wpListSnippets();
+  const existing = all.find((s) => s.name === name);
+
+  const payload = {
+    name,
+    code,
+    desc: description,
+    scope,
+    tags,
+    priority,
+    active,
+    network: false,
+  };
+
+  const saved = existing
+    ? await wpFetch(`/code-snippets/v1/snippets/${existing.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+    : await wpFetch("/code-snippets/v1/snippets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+  const id = saved?.id || existing?.id;
+
+  // Niektore wersje wtyczki nie honoruja 'active' przy zapisie - dobij aktywacja.
+  if (active && id && saved?.active === false) {
+    await wpFetch(`/code-snippets/v1/snippets/${id}/activate`, { method: "POST" }).catch(() => {});
+  }
+
+  return { id, created: !existing, editLink: snippetEditLink(id) };
+}

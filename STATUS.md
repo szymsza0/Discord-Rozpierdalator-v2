@@ -26,6 +26,23 @@
       (`.zl-form-box .wpcf7-form ...`) niesie `<style>` w szablonie.
   - Bez nowych ENV. Nowy szablon nie wymaga `WP_LP_TEMPLATE_PAGE_ID`.
 
+- [x] Nowa komenda `!webhook` - wstawia/aktualizuje skrypt webhooka Contact Form 7
+  jako **fragment HTML we wtyczce "Code Snippets"** (pl. "Fragmenty kodu"),
+  przez jej REST API `code-snippets/v1` (to samo Application Password; konto WP
+  musi mieć `manage_options`).
+  - Fragment: `scope: site-footer`, aktywny, identyfikowany po nazwie-markerze
+    `ITM webhook :: <klucz>` (ponowne uruchomienie z tym samym `slug` nadpisuje,
+    nie mnoży).
+  - Skrypt (`src/templates/webhook-cf7.tmpl.js`): 1 wysyłka na wypełnienie
+    (guard + dedup 8 s + tylko `wpcf7mailsent`), payload w 100% dynamiczny ze
+    wszystkich pól, `_formularz` / `_formularz_nr` / `_formularz_sekcja` /
+    `_page_url` / `_timestamp`.
+  - Składnia inline: `!webhook` + `webhook:` / `formularz:` / `slug:` / `nazwa:`
+    (reszta dopytywana interaktywnie). `!webhook help` - podpowiedź.
+  - `!lp` (nowy szablon) na końcu pyta opcjonalnie o URL webhooka i robi to samo
+    (współdzielony `buildWebhookSnippetCode` + `wpUpsertSnippet`).
+  - `wordpressClient.js`: `wpListSnippets()`, `wpUpsertSnippet()`.
+
 ## 2026-07-04
 
 - [x] Nowa komenda `!skrypt` - generator skryptów reklamowych AI:
