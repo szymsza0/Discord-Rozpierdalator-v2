@@ -1,18 +1,24 @@
-import { EmbedBuilder } from "discord.js";
+import { AttachmentBuilder, EmbedBuilder } from "discord.js";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { WP_BASE_URL } from "../config.js";
 import { wpUpsertSnippet } from "../utils/wordpressClient.js";
 
 /**
- * !webhook - wstawia (lub aktualizuje) skrypt webhooka formularza CF7 jako
- * fragment HTML we wtyczce "Code Snippets" (scope: site-footer), przez jej
+ * !webhook - buduje skrypt webhooka formularza CF7 i probuje go zapisac jako
+ * fragment HTML we wtyczce "Code Snippets" (scope: site-footer) przez jej
  * REST API. Skrypt: 1 wysylka na wypelnienie, dynamiczne pola, rozroznienie
  * instancji formularza. Fragment jest identyfikowany po nazwie-markerze, wiec
  * ponowne uruchomienie z tym samym `slug` nadpisuje istniejacy, nie mnozy.
  *
+ * Jesli REST API Code Snippets nie odpowiada (endpoint nieobecny / stara
+ * wersja wtyczki / blokada bezpieczenstwa -> `rest_no_route`), bot automatycznie
+ * przechodzi w TRYB RECZNY: wysyla gotowy fragment jako plik .html + instrukcje
+ * krok-po-kroku, jak go wkleic w Code Snippets. Ten sam tryb wymusza
+ * `!webhook reczny` (albo `manual` / `snippet`).
+ *
  * Skladnia (inline, wszystko opcjonalne - reszte bot dopyta):
- *   !webhook
+ *   !webhook [reczny]
  *   webhook: https://hook.eu2.make.com/xxxxx
  *   formularz: zt-geneo
  *   slug: zt-ganeo-oferta-specjalna/
@@ -97,6 +103,61 @@ export async function buildWebhookSnippetCode({ webhookUrl, formName, pageSlug =
   return `<script>\n${js}\n</script>`;
 }
 
+/**
+ * Tryb reczny: wysyla gotowy fragment jako plik .html + instrukcje wklejenia
+ * w Code Snippets. Uzywane, gdy REST API wtyczki nie odpowiada albo gdy user
+ * jawnie zada `!webhook reczny`.
+ */
+async function sendManualSnippet(channel, { code, snippetName, markerKey, webhookUrl, formName, pageSlug }, apiError) {
+  const file = new AttachmentBuilder(Buffer.from(code, "utf8"), {
+    name: `itm-webhook-${markerKey || "global"}.html`,
+  });
+
+  const lines = [
+    apiError
+      ? `⚠️ Nie zapisano fragmentu przez REST API (${errDetail(apiError)}). ` +
+        "Poniżej gotowy fragment do wklejenia ręcznie."
+      : "Gotowy fragment webhooka CF7 do wklejenia we wtyczce **Code Snippets**.",
+    "",
+    '**Jak dodać (wtyczka „Code Snippets" / „Fragmenty kodu"):**',
+    "1. WP Admin → **Snippets → Add New** (Fragmenty → Dodaj nowy).",
+    "2. Typ fragmentu: **HTML** (zakładka *Content / Zawartość*).",
+    `3. Nazwa fragmentu: \`${snippetName}\``,
+    "4. Wklej **całą** zawartość załączonego pliku `.html` w pole kodu.",
+    "5. **Miejsce wstawienia (scope):** *Only run on site front-end* → " +
+      "**Display in site footer** (wstrzyknięcie przez `wp_footer`).",
+    "6. Kliknij **Save Changes and Activate** (Zapisz i aktywuj).",
+    "",
+    "**Parametry tego fragmentu:**",
+    `• Webhook: \`${webhookUrl}\``,
+    `• Pole \`_formularz\`: \`${formName}\``,
+    `• Slug ograniczający: \`${pageSlug || "(brak - działa na każdej stronie)"}\``,
+    "",
+    "Skrypt sam pilnuje: **1 wysyłka na poprawne wypełnienie**, dedup 8 s, guard " +
+      "przed podwójnym załadowaniem, rozróżnienie instancji formularza " +
+      "(`_formularz_nr`, `_formularz_sekcja`).",
+  ];
+
+  if (pageSlug) {
+    lines.push(
+      "",
+      `Slug jest wpisany na sztywno w kod - fragment zadziała tylko na URL-ach ` +
+        `zawierających \`${pageSlug}\`. Zmiana sluga = wygeneruj fragment na nowo.`
+    );
+  }
+
+  return channel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setColor("#FAA61A")
+        .setTitle("🎣 Webhook: fragment do wklejenia ręcznie")
+        .setDescription(lines.join("\n").slice(0, 4000))
+        .setFooter({ text: "Po wklejeniu fragment działa tak samo jak przy zapisie przez API." }),
+    ],
+    files: [file],
+  });
+}
+
 export async function processWebhookCommand(message) {
   try {
     const content = message.content.slice("!webhook".length).trim();
@@ -105,14 +166,17 @@ export async function processWebhookCommand(message) {
       return message.channel.send({
         embeds: [
           infoEmbed(
-            "`!webhook` wstawia skrypt webhooka CF7 jako fragment HTML w Code Snippets (stopka).\n\n" +
+            "`!webhook` buduje skrypt webhooka CF7 i próbuje zapisać go jako fragment HTML w Code Snippets (stopka).\n\n" +
               "Inline (opcjonalnie):\n```\n!webhook\nwebhook: https://hook.eu2.make.com/xxxxx\nformularz: zt-geneo\nslug: zt-ganeo-oferta-specjalna/\n```\n" +
-              "Puste `slug` = skrypt działa na każdej stronie (i tak ma dedup + guard)."
+              "Puste `slug` = skrypt działa na każdej stronie (i tak ma dedup + guard).\n\n" +
+              "`!webhook reczny` (lub gdy REST API wtyczki nie odpowiada) - bot zamiast zapisu " +
+              "przez API wysyła gotowy fragment jako plik `.html` + instrukcję wklejenia."
           ),
         ],
       });
     }
 
+    const manualMode = /(^|\s)(reczny|ręczny|manual|snippet)(\s|$)/i.test(content);
     const inline = parseInlineArgs(content);
 
     let webhookUrl = inline.webhook;
@@ -149,7 +213,13 @@ export async function processWebhookCommand(message) {
     const snippetName = `ITM webhook :: ${markerKey}`;
 
     const processing = await message.channel.send({
-      embeds: [infoEmbed("⏳ Buduję skrypt i zapisuję fragment w Code Snippets...")],
+      embeds: [
+        infoEmbed(
+          manualMode
+            ? "⏳ Buduję fragment webhooka (tryb ręczny - dostaniesz plik do wklejenia)..."
+            : "⏳ Buduję skrypt i zapisuję fragment w Code Snippets..."
+        ),
+      ],
     });
 
     let code;
@@ -157,6 +227,13 @@ export async function processWebhookCommand(message) {
       code = await buildWebhookSnippetCode({ webhookUrl, formName, pageSlug });
     } catch (err) {
       return processing.edit({ embeds: [errorEmbed(`Nie znaleziono szablonu webhooka: ${err.message}`)] });
+    }
+
+    const snippetMeta = { code, snippetName, markerKey, webhookUrl, formName, pageSlug };
+
+    if (manualMode) {
+      await processing.delete().catch(() => {});
+      return sendManualSnippet(message.channel, snippetMeta, null);
     }
 
     let result;
@@ -170,15 +247,11 @@ export async function processWebhookCommand(message) {
         active: true,
       });
     } catch (err) {
-      console.error("Error upserting Code Snippet:", err);
-      return processing.edit({
-        embeds: [
-          errorEmbed(
-            `Nie udało się zapisać fragmentu: ${err.message}\n\n` +
-              "Sprawdź czy wtyczka **Code Snippets** ma włączone REST API i czy konto WP z Application Password jest administratorem."
-          ),
-        ],
-      });
+      // REST API Code Snippets nieobecne / zablokowane (rest_no_route itp.) ->
+      // zamiast twardego bledu daj gotowy fragment do wklejenia recznie.
+      console.error("Error upserting Code Snippet, falling back to manual snippet:", err);
+      await processing.delete().catch(() => {});
+      return sendManualSnippet(message.channel, snippetMeta, err);
     }
 
     const embed = new EmbedBuilder()
