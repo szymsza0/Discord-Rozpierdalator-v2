@@ -40,6 +40,19 @@ const SELECT_TIMEOUT_MS = 60000;
 // Osoby skanowane przez codzienny, zaplanowany !discovery (patrz runScheduledDiscovery).
 export const SCHEDULED_TARGET_NAMES = ["Agnieszka", "Szymon"];
 
+// Leady (karty CRM), których NIE pokazujemy w powiadomieniach sales - dopasowanie
+// po fragmencie nazwy karty, bez uwzględniania wielkości liter i polskich znaków
+// (patrz normalizeName). Dotyczy zarówno codziennego przeglądu, jak i ręcznego
+// !discovery. Dopisz kolejne wzorce, żeby wyciszyć następne rodzaje leadów.
+const NOTIFY_EXCLUDED_NAME_PATTERNS = ["fachowiec"];
+
+function isCardNotifyExcluded(card) {
+  const name = normalizeName(card?.name || "");
+  return NOTIFY_EXCLUDED_NAME_PATTERNS.some((pattern) =>
+    name.includes(normalizeName(pattern))
+  );
+}
+
 function errorEmbed(desc) {
   return new EmbedBuilder().setColor("#FF0000").setDescription(`❌ ${desc}`);
 }
@@ -116,7 +129,9 @@ async function scanMemberCards(matchedLists, memberId) {
     const memberCards = cards
       .filter(
         (card) =>
-          card.idMembers?.includes(memberId) && isDueInScope(card, deadline)
+          card.idMembers?.includes(memberId) &&
+          isDueInScope(card, deadline) &&
+          !isCardNotifyExcluded(card)
       )
       .sort((a, b) => new Date(a.due) - new Date(b.due));
 
